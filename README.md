@@ -187,7 +187,7 @@ extraction will have to address with events rather than constraints.
 ## Progress
 
 - [x] **Phase 0** — characterization tests around the reminder API
-- [ ] **Phase 1** — containerize the monolith as it is
+- [x] **Phase 1** — containerize the monolith as it is
 - [ ] **Phase 2** — OpenTelemetry instrumentation exported to Jaeger
 - [ ] **Phase 3** — introduce `IReminderGateway` with the Entity Framework implementation
 - [ ] **Phase 4** — the Treatment service with its own database
@@ -196,6 +196,54 @@ extraction will have to address with events rather than constraints.
 - [ ] **Phase 7** — equivalence tests
 - [ ] **Phase 8** — repeat the data copy and switch reminders to the Treatment service
 - [ ] **Phase 9** — remove the old path from the monolith
+
+## Running the application
+
+Docker is the only prerequisite — the monolith and SQL Server both run in containers.
+
+Copy `.env.example` to `.env` and fill it in — it documents every variable Compose
+expects and why.
+
+```
+cp .env.example .env
+docker compose up -d --build
+```
+
+Compose waits for SQL Server to report healthy before it starts the monolith, so the first
+run takes about a minute. On Apple Silicon the database runs under emulation; the Compose
+file pins it to `linux/amd64` because SQL Server has no arm64 image.
+
+| Address | What |
+| --- | --- |
+| `localhost:8080` | the monolith — the address the frontend uses, before and after the migration |
+| `localhost:14330` | the monolith's SQL Server |
+
+The ports match the Strangler Fig repository, where `8080` is the gateway, so the two stacks
+cannot run at the same time. Stop one with `docker compose stop` before starting the other.
+
+### Applying the database schema
+
+The schema is not created automatically. Apply the migrations from the host, against the
+port Compose publishes:
+
+```
+set -a; . ./.env; set +a
+ConnectionStrings__IsoSupportDb="Server=localhost,14330;Database=IsoTreatmentProcessSupport;User Id=sa;Password=$MSSQL_SA_PASSWORD;Encrypt=true;TrustServerCertificate=true;" \
+  dotnet ef database update --project IsoTreatmentProcessSupportAPI
+```
+
+This needs the EF Core tools (`dotnet tool install --global dotnet-ef`) and has to be repeated
+whenever the `mssql-data` volume is removed.
+
+### Checking that it works
+
+| Request | Expected |
+| --- | --- |
+| `GET localhost:8080/swagger/index.html` | 200 — the application started |
+| `GET localhost:8080/api/reminder` | 401 — routing and authentication are wired |
+| `POST localhost:8080/api/user/login` with unknown credentials | 400 — the application reached the database |
+
+A 500 on the last one means the database is unreachable or the schema was never applied.
 
 ## Running the tests
 
