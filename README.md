@@ -188,7 +188,7 @@ extraction will have to address with events rather than constraints.
 
 - [x] **Phase 0** — characterization tests around the reminder API
 - [x] **Phase 1** — containerize the monolith as it is
-- [ ] **Phase 2** — OpenTelemetry instrumentation exported to Jaeger
+- [x] **Phase 2** — OpenTelemetry instrumentation exported to Jaeger
 - [ ] **Phase 3** — introduce `IReminderGateway` with the Entity Framework implementation
 - [ ] **Phase 4** — the Treatment service with its own database
 - [ ] **Phase 5** — one-off copy of the reminder data
@@ -202,7 +202,8 @@ extraction will have to address with events rather than constraints.
 Docker is the only prerequisite — the monolith and SQL Server both run in containers.
 
 Copy `.env.example` to `.env` and fill it in — it documents every variable Compose
-expects and why.
+expects and why. Only the SMTP entries are optional; without them registration and
+password reset return 500, and nothing else is affected.
 
 ```
 cp .env.example .env
@@ -216,6 +217,7 @@ file pins it to `linux/amd64` because SQL Server has no arm64 image.
 | Address | What |
 | --- | --- |
 | `localhost:8080` | the monolith — the address the frontend uses, before and after the migration |
+| `localhost:16686` | Jaeger UI |
 | `localhost:14330` | the monolith's SQL Server |
 
 The ports match the Strangler Fig repository, where `8080` is the gateway, so the two stacks
@@ -244,6 +246,28 @@ whenever the `mssql-data` volume is removed.
 | `POST localhost:8080/api/user/login` with unknown credentials | 400 — the application reached the database |
 
 A 500 on the last one means the database is unreachable or the schema was never applied.
+
+## Distributed tracing
+
+The monolith is instrumented with OpenTelemetry and exports over OTLP to Jaeger at
+`localhost:16686`. The service name and the exporter endpoint come from environment
+variables in the Compose file — the OpenTelemetry SDK reads `OTEL_SERVICE_NAME` and
+`OTEL_EXPORTER_OTLP_ENDPOINT` by itself, so neither appears in application code.
+
+Instrumentation went in before any reminder code changed, so that a reminder request served
+entirely in-process is on record:
+
+```
+monolith  GET api/reminder
+monolith  SELECT [u].[Id] ...
+```
+
+One request, one SQL query: `ReminderService` loads reminders through
+`Users.Include(u => u.Reminders)`, a join that only works while reminders and users live in
+the same database.
+
+Tracing is not on the critical path. Stopping the Jaeger container leaves every endpoint
+working; exports fail silently in the background.
 
 ## Running the tests
 

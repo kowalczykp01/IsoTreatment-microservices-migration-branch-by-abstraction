@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using NLog.Web;
+using OpenTelemetry.Trace;
 using System.Reflection;
 using System.Text;
 
@@ -82,6 +83,13 @@ builder.Services.AddCors(options =>
     .WithOrigins("http://localhost:5173")
     );
 });
+
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddOtlpExporter()
+        .AddSqlClientInstrumentation());
 
 var app = builder.Build();
 

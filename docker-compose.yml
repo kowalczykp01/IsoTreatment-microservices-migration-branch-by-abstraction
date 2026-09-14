@@ -12,6 +12,11 @@ services:
       - ConnectionStrings__IsoSupportDb=Server=monolith.database,1433;Database=IsoTreatmentProcessSupport;User Id=sa;Password=${MSSQL_SA_PASSWORD};Encrypt=true;TrustServerCertificate=true;
       - Authentication__SigningKey=${AUTHENTICATION_SIGNING_KEY}
       - ASPNETCORE_ENVIRONMENT=Production
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_SERVICE_NAME=monolith
+      - EmailHost
+      - EmailUsername
+      - EmailPassword
 
   monolith.database:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -29,6 +34,13 @@ services:
       timeout: 30s
       retries: 5
       start_period: 30s
+
+  jaeger:
+    image: jaegertracing/jaeger:2.20.0
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
 
 volumes:
   mssql-data:
