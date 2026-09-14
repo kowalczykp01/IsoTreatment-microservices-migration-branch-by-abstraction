@@ -8,6 +8,7 @@ using IsoTreatmentProcessSupportAPI.Models.Validators;
 using IsoTreatmentProcessSupportAPI.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using NLog.Web;
 using System.Reflection;
@@ -51,7 +52,12 @@ builder.Services.AddAuthentication(option =>
 
 builder.Services.AddSingleton(authenticationSettings);
 builder.Services.AddControllers().AddFluentValidation();
-builder.Services.AddDbContext<IsoSupportDbContext>();
+var connectionString = builder.Configuration.GetConnectionString("IsoSupportDb")
+    ?? throw new InvalidOperationException(
+        "Missing connection string 'ConnectionStrings:IsoSupportDb' "
+        + "(environment variable: ConnectionStrings__IsoSupportDb).");
+
+builder.Services.AddDbContext<IsoSupportDbContext>(options => options.UseSqlServer(connectionString));
 builder.Services.AddAutoMapper(Assembly.GetExecutingAssembly());
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
@@ -97,3 +103,5 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+public partial class Program { }
