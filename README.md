@@ -186,7 +186,7 @@ extraction will have to address with events rather than constraints.
 
 ## Progress
 
-- [ ] **Phase 0** — characterization tests around the reminder API
+- [x] **Phase 0** — characterization tests around the reminder API
 - [ ] **Phase 1** — containerize the monolith as it is
 - [ ] **Phase 2** — OpenTelemetry instrumentation exported to Jaeger
 - [ ] **Phase 3** — introduce `IReminderGateway` with the Entity Framework implementation
@@ -196,5 +196,14 @@ extraction will have to address with events rather than constraints.
 - [ ] **Phase 7** — equivalence tests
 - [ ] **Phase 8** — repeat the data copy and switch reminders to the Treatment service
 - [ ] **Phase 9** — remove the old path from the monolith
+
+## Running the tests
+
+The characterization tests start a real SQL Server in a throwaway container, so Docker has
+to be running:
+
+```
+dotnet test tests/IsoTreatmentProcessSupportAPI.CharacterizationTests
+```
 
 Fuller technical documentation follows as the implementation progresses.
