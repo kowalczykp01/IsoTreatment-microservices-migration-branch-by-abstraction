@@ -2,6 +2,7 @@ using FluentValidation;
 using FluentValidation.AspNetCore;
 using IsoTreatmentProcessSupportAPI;
 using IsoTreatmentProcessSupportAPI.Entities;
+using IsoTreatmentProcessSupportAPI.Gateways;
 using IsoTreatmentProcessSupportAPI.Middlewares;
 using IsoTreatmentProcessSupportAPI.Models;
 using IsoTreatmentProcessSupportAPI.Models.Validators;
@@ -69,6 +70,7 @@ builder.Services.AddScoped<IValidator<ResetPasswordDto>, ResetPasswordDtoValidat
 builder.Services.AddTransient<IMailkitService, MailkitService>();
 builder.Services.AddTransient<ITokenService, TokenService>();
 builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<IReminderGateway, EfReminderGateway>();
 builder.Services.AddScoped<IReminderService, ReminderService>();
 builder.Services.AddScoped<IEntryService, EntryService>();
 builder.Services.AddScoped<ITreatmentProcessService, TreatmentProcessService>();

@@ -189,7 +189,7 @@ extraction will have to address with events rather than constraints.
 - [x] **Phase 0** — characterization tests around the reminder API
 - [x] **Phase 1** — containerize the monolith as it is
 - [x] **Phase 2** — OpenTelemetry instrumentation exported to Jaeger
-- [ ] **Phase 3** — introduce `IReminderGateway` with the Entity Framework implementation
+- [x] **Phase 3** — introduce `IReminderGateway` with the Entity Framework implementation
 - [ ] **Phase 4** — the Treatment service with its own database
 - [ ] **Phase 5** — one-off copy of the reminder data
 - [ ] **Phase 6** — the HTTP implementation, behind a flag
@@ -265,6 +265,21 @@ monolith  SELECT [u].[Id] ...
 One request, one SQL query: `ReminderService` loads reminders through
 `Users.Include(u => u.Reminders)`, a join that only works while reminders and users live in
 the same database.
+
+Introducing the abstraction in Phase 3 changed that, before any request left the process:
+
+```
+monolith  GET api/reminder
+monolith  SELECT [Users]
+monolith  SELECT [Reminders]
+```
+
+The client sent the same request and got the same response; the characterization tests pass
+unmodified. But checking the user and reading reminders are now two separate steps on two
+sides of `IReminderGateway`, and the join cannot survive that. The extra round trip is the
+price of the seam itself, paid while everything still runs against one database — the
+Strangler Fig migration shows the same two queries, but only once the Treatment service
+took over.
 
 Tracing is not on the critical path. Stopping the Jaeger container leaves every endpoint
 working; exports fail silently in the background.
