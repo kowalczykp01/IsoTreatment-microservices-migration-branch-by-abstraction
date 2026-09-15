@@ -24,7 +24,8 @@ namespace IsoTreatmentProcessSupportAPI.Gateways
             using var response = await SendAsync(HttpMethod.Get, RemindersPath, null, cancellationToken);
             response.EnsureSuccessStatusCode();
 
-            return await response.Content.ReadFromJsonAsync<List<ReminderDto>>(cancellationToken) ?? new List<ReminderDto>();
+            var reminders = await response.Content.ReadFromJsonAsync<List<TreatmentReminder>>(cancellationToken);
+            return reminders?.Select(ToDto).ToList() ?? new List<ReminderDto>();
         }
 
         public async Task<ReminderDto?> GetByIdForUserAsync(int id, int userId, CancellationToken cancellationToken = default)
@@ -39,7 +40,7 @@ namespace IsoTreatmentProcessSupportAPI.Gateways
             using var response = await SendAsync(HttpMethod.Post, RemindersPath, time, cancellationToken);
             response.EnsureSuccessStatusCode();
 
-            return (await response.Content.ReadFromJsonAsync<ReminderDto>(cancellationToken))!;
+            return ToDto((await response.Content.ReadFromJsonAsync<TreatmentReminder>(cancellationToken))!);
         }
 
         public async Task<ReminderDto?> UpdateAsync(int id, int userId, TimeOnly time, CancellationToken cancellationToken = default)
@@ -73,7 +74,7 @@ namespace IsoTreatmentProcessSupportAPI.Gateways
 
             if (time is not null)
             {
-                request.Content = JsonContent.Create(new CreateAndUpdateReminderDto { Time = time.Value });
+                request.Content = JsonContent.Create(new TreatmentReminderRequest(time.Value));
             }
 
             return await _httpClient.SendAsync(request, cancellationToken);
@@ -87,7 +88,18 @@ namespace IsoTreatmentProcessSupportAPI.Gateways
             }
 
             response.EnsureSuccessStatusCode();
-            return await response.Content.ReadFromJsonAsync<ReminderDto>(cancellationToken);
+            var reminder = await response.Content.ReadFromJsonAsync<TreatmentReminder>(cancellationToken);
+            return reminder is null ? null : ToDto(reminder);
         }
+
+        private static ReminderDto ToDto(TreatmentReminder reminder) =>
+            new ReminderDto { Id = reminder.Id, Time = reminder.Time };
+
+        // Wire shapes for the call to the Treatment service. They deliberately do not reuse
+        // ReminderDto, whose converter formats time as "HH:mm" for the frontend and would drop
+        // seconds on this internal boundary. Plain TimeOnly serializes with full precision.
+        private sealed record TreatmentReminder(int Id, TimeOnly Time);
+
+        private sealed record TreatmentReminderRequest(TimeOnly Time);
     }
 }

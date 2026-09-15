@@ -150,6 +150,14 @@ against both of them: the Entity Framework gateway against a test database, and 
 gateway against a test instance of the Treatment service, each seeded with identical data.
 A difference between the two fails the same test that passes for the other.
 
+The first run found one. Times crossed the HTTP boundary in the frontend's `"HH:mm"` format,
+so a reminder added for `07:05:30` was stored as `07:05:30` by the Entity Framework gateway
+and as `07:05:00` by the HTTP one. No client could have noticed — the monolith formats times
+as `"HH:mm"` on the way out either way, which is why neither the characterization tests nor
+the side-by-side comparison in Phase 6 caught it — but the data stored differed. The
+Treatment service and the gateway now exchange times with full precision; the format the
+frontend sees is unchanged.
+
 ### Phase 8 — switch reminders to the Treatment service
 
 **The data copy from Phase 5 is repeated immediately before the flag is turned on.**
@@ -195,7 +203,7 @@ extraction will have to address with events rather than constraints.
 - [x] **Phase 4** — the Treatment service with its own database
 - [x] **Phase 5** — one-off copy of the reminder data
 - [x] **Phase 6** — the HTTP implementation, behind a flag
-- [ ] **Phase 7** — equivalence tests
+- [x] **Phase 7** — equivalence tests
 - [ ] **Phase 8** — repeat the data copy and switch reminders to the Treatment service
 - [ ] **Phase 9** — remove the old path from the monolith
 
@@ -403,5 +411,25 @@ to be running:
 ```
 dotnet test tests/IsoTreatmentProcessSupportAPI.CharacterizationTests
 ```
+
+### Equivalence tests
+
+These run one set of assertions against both implementations of `IReminderGateway`. Every
+test is a theory with two cases, `EntityFramework` and `TreatmentService`:
+
+```
+dotnet test tests/IsoTreatment.GatewayEquivalenceTests
+```
+
+They need Docker as well, but not the Compose stack. One throwaway SQL Server container holds
+two databases: the monolith's schema, used by `EfReminderGateway` directly, and the Treatment
+service's, used by an in-memory instance of the real service started with
+`WebApplicationFactory`, which `TreatmentServiceReminderGateway` calls over HTTP. Before each
+test both sides are seeded with the same reminders, the same ids and the same identity
+value, so assertions name exact results, including the id of a newly added reminder.
+
+The HTTP gateway is given a token for the user it acts for, the way it would receive one from
+an authenticated request in the monolith. Checking that the user exists is not part of the
+gateway and not tested here; the characterization tests cover it.
 
 Fuller technical documentation follows as the implementation progresses.

@@ -4,13 +4,16 @@ using System.Text.Json.Serialization;
 
 namespace TreatmentService.Api.Serialization;
 
+// The service's only client is the monolith, which formats times for the frontend itself.
+// On this internal boundary times travel with full precision, so nothing stored is lost.
 public sealed class JsonTimeOnlyConverter : JsonConverter<TimeOnly>
 {
-    private readonly CultureInfo _cultureInfo = new("pl-PL");
+    private const string Format = "HH:mm:ss.FFFFFFF";
 
     public override TimeOnly Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        if (reader.TokenType == JsonTokenType.String && TimeSpan.TryParse(reader.GetString(), out var timeSpan))
+        if (reader.TokenType == JsonTokenType.String
+            && TimeSpan.TryParse(reader.GetString(), CultureInfo.InvariantCulture, out var timeSpan))
         {
             return TimeOnly.FromTimeSpan(timeSpan);
         }
@@ -19,5 +22,5 @@ public sealed class JsonTimeOnlyConverter : JsonConverter<TimeOnly>
     }
 
     public override void Write(Utf8JsonWriter writer, TimeOnly value, JsonSerializerOptions options) =>
-        writer.WriteStringValue(value.ToString(_cultureInfo));
+        writer.WriteStringValue(value.ToString(Format, CultureInfo.InvariantCulture));
 }

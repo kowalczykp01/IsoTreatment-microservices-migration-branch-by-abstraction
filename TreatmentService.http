@@ -24,7 +24,7 @@ GET {{treatment}}/api/reminder
 GET {{treatment}}/api/reminder
 Authorization: Bearer {{token}}
 
-### Create  ->  200 {"id":N,"time":"08:00"}
+### Create  ->  200 {"id":N,"time":"08:00:00"}  (full precision; the monolith formats "08:00" for the frontend)
 POST {{treatment}}/api/reminder
 Content-Type: application/json
 Authorization: Bearer {{token}}
