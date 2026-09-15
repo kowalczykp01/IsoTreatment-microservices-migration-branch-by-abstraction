@@ -171,6 +171,16 @@ Rolling back is turning the flag off again, with one caveat that the Strangler F
 did not have: reminders written to the Treatment service after the switch exist only in its
 database.
 
+In the characterization tests this required changing where reminders are seeded and
+inspected, never what is asserted. The test class became a base with two variants that
+share every test: one with the flag off, reading and writing reminders in the monolith's
+database, and one with the flag on, where the monolith calls an in-memory instance of the
+real Treatment service and reminders live in its database. Users stay in the monolith's
+database in both.
+
+The monolith is stopped for the copy. Without that, a reminder written between the copy and
+the restart would land in the database the monolith is about to stop reading.
+
 ### Phase 9 — remove the old path
 
 `EfReminderGateway`, the `Reminder` entity and its mapping in `IsoSupportDbContext` are
@@ -204,7 +214,7 @@ extraction will have to address with events rather than constraints.
 - [x] **Phase 5** — one-off copy of the reminder data
 - [x] **Phase 6** — the HTTP implementation, behind a flag
 - [x] **Phase 7** — equivalence tests
-- [ ] **Phase 8** — repeat the data copy and switch reminders to the Treatment service
+- [x] **Phase 8** — repeat the data copy and switch reminders to the Treatment service
 - [ ] **Phase 9** — remove the old path from the monolith
 
 ## Running the application
@@ -326,8 +336,8 @@ implementation of `IReminderGateway` it registers:
 
 | Flag | Implementation | Reminders live in |
 | --- | --- | --- |
-| `false` (default) | `EfReminderGateway` | the monolith's database |
-| `true` | `TreatmentServiceReminderGateway` | the Treatment service's database, reached over HTTP |
+| `false` (default in `appsettings.json`) | `EfReminderGateway` | the monolith's database |
+| `true` (set in `docker-compose.yml` since Phase 8) | `TreatmentServiceReminderGateway` | the Treatment service's database, reached over HTTP |
 
 It is read once, at startup; changing it means restarting the monolith. With the flag on,
 `TreatmentService:BaseAddress` is required as well — Compose already sets it to
@@ -354,6 +364,31 @@ the copy repeated in Phase 8 overwrites it.
 ```
 docker stop bba-flag-on
 ```
+
+### Switching
+
+The switch was made in this order, and a repeat of it — or a rollback — should follow the
+same one:
+
+```
+docker compose stop monolith                                     # no more writes to the old database
+dotnet run --project tools/ReminderDataCopy -- --replace         # the second copy, see "Copying the reminder data"
+# docker-compose.yml: Features__UseTreatmentServiceForReminders=true
+docker compose up -d monolith
+```
+
+The monolith, and with it the whole API, is unavailable for as long as the copy takes —
+seconds for this data set. That is the price of a consistent copy without dual writes, and a
+difference from the Strangler Fig switch, which needed no downtime because both services
+shared one database.
+
+Before the switch the reminder lists of all users were recorded through `localhost:8080`;
+after it the same requests returned byte-identical responses. A reminder created afterwards
+was stored in the Treatment database and not in the monolith's.
+
+Rolling back is the reverse: stop the monolith, set the flag to `false`, start it. Reminders
+written since the switch exist only in the Treatment database and would have to be copied
+back first — the copy tool only goes one way.
 
 ## Distributed tracing
 
@@ -411,6 +446,10 @@ to be running:
 ```
 dotnet test tests/IsoTreatmentProcessSupportAPI.CharacterizationTests
 ```
+
+Every test runs twice, as `RemindersServedFromTheMonolithDatabase` with the flag off and as
+`RemindersServedThroughTheTreatmentService` with it on, against an in-memory Treatment
+service with a database of its own in the same container.
 
 ### Equivalence tests
 

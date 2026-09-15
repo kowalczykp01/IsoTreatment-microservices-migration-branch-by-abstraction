@@ -4,18 +4,29 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IsoTreatmentProcessSupportAPI.CharacterizationTests;
 
+public sealed record StoredReminder(int Id, int UserId, TimeOnly Time);
+
 public sealed class TestDatabase
 {
     public const string RequiredDatabaseNameSuffix = "_CharacterizationTests";
 
     private readonly DbContextOptions<IsoSupportDbContext> _options;
+    private readonly string _monolithConnectionString;
+    private readonly string _remindersConnectionString;
 
-    public TestDatabase(string connectionString)
+    // Users always live in the monolith's database. Reminders live in whichever database owns
+    // them for the run: the monolith's with the flag off, the Treatment service's with it on.
+    // Both Reminders tables have the same columns, so reminders are handled in plain SQL.
+    public TestDatabase(string monolithConnectionString, string? remindersConnectionString = null)
     {
-        EnsureDatabaseIsDisposable(connectionString);
+        _monolithConnectionString = monolithConnectionString;
+        _remindersConnectionString = remindersConnectionString ?? monolithConnectionString;
+
+        EnsureDatabaseIsDisposable(_monolithConnectionString);
+        EnsureDatabaseIsDisposable(_remindersConnectionString);
 
         _options = new DbContextOptionsBuilder<IsoSupportDbContext>()
-            .UseSqlServer(connectionString)
+            .UseSqlServer(monolithConnectionString)
             .Options;
     }
 
@@ -34,8 +45,16 @@ public sealed class TestDatabase
 
     public async Task ResetAsync()
     {
-        await using var dbContext = new IsoSupportDbContext(_options);
-        await dbContext.Database.ExecuteSqlRawAsync(
+        if (_remindersConnectionString != _monolithConnectionString)
+        {
+            await ExecuteAsync(_remindersConnectionString,
+                """
+                DELETE FROM [Reminders];
+                DBCC CHECKIDENT ('[Reminders]', RESEED, 0);
+                """);
+        }
+
+        await ExecuteAsync(_monolithConnectionString,
             """
             DELETE FROM [Entries];
             DELETE FROM [Reminders];
@@ -68,16 +87,38 @@ public sealed class TestDatabase
 
     public async Task<int> SeedReminderAsync(int userId, TimeOnly time)
     {
-        await using var dbContext = new IsoSupportDbContext(_options);
-        var reminder = new Reminder { UserId = userId, Time = time };
-        dbContext.Reminders.Add(reminder);
-        await dbContext.SaveChangesAsync();
-        return reminder.Id;
+        await using var connection = new SqlConnection(_remindersConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "INSERT INTO [Reminders] ([UserId], [Time]) OUTPUT INSERTED.[Id] VALUES (@userId, @time)", connection);
+        command.Parameters.AddWithValue("@userId", userId);
+        command.Parameters.AddWithValue("@time", time.ToTimeSpan());
+        return (int)(await command.ExecuteScalarAsync())!;
     }
 
-    public async Task<List<Reminder>> GetRemindersAsync()
+    public async Task<List<StoredReminder>> GetRemindersAsync()
     {
-        await using var dbContext = new IsoSupportDbContext(_options);
-        return await dbContext.Reminders.AsNoTracking().OrderBy(r => r.Id).ToListAsync();
+        await using var connection = new SqlConnection(_remindersConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SELECT [Id], [UserId], [Time] FROM [Reminders] ORDER BY [Id]", connection);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        var reminders = new List<StoredReminder>();
+        while (await reader.ReadAsync())
+        {
+            reminders.Add(new StoredReminder(
+                reader.GetInt32(0), reader.GetInt32(1), TimeOnly.FromTimeSpan(reader.GetTimeSpan(2))));
+        }
+
+        return reminders;
+    }
+
+    private static async Task ExecuteAsync(string connectionString, string sql)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync();
     }
 }

@@ -4,16 +4,29 @@ using FluentAssertions;
 
 namespace IsoTreatmentProcessSupportAPI.CharacterizationTests;
 
+// The same tests, the same HTTP requests to the same monolith, run twice: once with the flag
+// off and once with it on. Only where reminders are seeded and inspected differs.
 [Collection(SqlServerCollection.Name)]
-public sealed class ReminderApiCharacterizationTests : IAsyncLifetime
+public sealed class RemindersServedFromTheMonolithDatabase(SqlServerFixture fixture)
+    : ReminderApiCharacterizationTests(
+        new TestDatabase(fixture.ConnectionString),
+        new MonolithApplicationFactory());
+
+[Collection(SqlServerCollection.Name)]
+public sealed class RemindersServedThroughTheTreatmentService(SqlServerFixture fixture)
+    : ReminderApiCharacterizationTests(
+        new TestDatabase(fixture.ConnectionString, fixture.TreatmentConnectionString),
+        new MonolithApplicationFactory(fixture.TreatmentService));
+
+public abstract class ReminderApiCharacterizationTests : IAsyncLifetime
 {
     private readonly TestDatabase _database;
     private readonly MonolithApplicationFactory _factory;
 
-    public ReminderApiCharacterizationTests(SqlServerFixture fixture)
+    protected ReminderApiCharacterizationTests(TestDatabase database, MonolithApplicationFactory factory)
     {
-        _database = new TestDatabase(fixture.ConnectionString);
-        _factory = new MonolithApplicationFactory();
+        _database = database;
+        _factory = factory;
     }
 
     public Task InitializeAsync() => _database.ResetAsync();

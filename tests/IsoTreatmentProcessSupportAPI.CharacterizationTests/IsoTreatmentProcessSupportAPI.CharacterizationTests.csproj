@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\IsoTreatmentProcessSupportAPI\IsoTreatmentProcessSupportAPI.csproj" />
+    <ProjectReference Include="..\..\TreatmentService\TreatmentService.Api\TreatmentService.Api.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,16 +1,49 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using IsoTreatmentProcessSupportAPI.Gateways;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
+using MonolithEntryPoint = IsoTreatmentProcessSupportAPI.Controllers.ReminderController;
+using TreatmentServiceEntryPoint = TreatmentService.Api.Controllers.ReminderController;
 
 namespace IsoTreatmentProcessSupportAPI.CharacterizationTests;
 
-public sealed class MonolithApplicationFactory : WebApplicationFactory<Program>
+// Both applications declare a top-level Program, so each factory is anchored on a type unique
+// to its assembly instead.
+public sealed class MonolithApplicationFactory : WebApplicationFactory<MonolithEntryPoint>
 {
     public const string Issuer = "isotreatment-users-issuer";
     public const string Audience = "isotreatment-users-audience";
     public const string SigningKey = "Kj9pL2mQ8rT5vW3nY6bC4dF1gH0jA9eZ2xU7yVqW3eR5tY6uI8oP9aS0dF==";
+
+    private readonly WebApplicationFactory<TreatmentServiceEntryPoint>? _treatmentService;
+
+    // Without a Treatment service the monolith runs as configured, flag off. With one, the flag
+    // is turned on exactly as in production and only the transport is replaced: the gateway's
+    // HttpClient reaches the in-memory service instead of a network address.
+    public MonolithApplicationFactory(WebApplicationFactory<TreatmentServiceEntryPoint>? treatmentService = null)
+    {
+        _treatmentService = treatmentService;
+    }
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        if (_treatmentService is null)
+        {
+            return;
+        }
+
+        builder.UseSetting("Features:UseTreatmentServiceForReminders", "true");
+        builder.UseSetting("TreatmentService:BaseAddress", "http://localhost/");
+
+        builder.ConfigureTestServices(services =>
+            services.AddHttpClient(nameof(IReminderGateway))
+                .ConfigurePrimaryHttpMessageHandler(() => _treatmentService.Server.CreateHandler()));
+    }
 
     public static string CreateToken(int userId, string? signingKey = null, string? issuer = null)
     {

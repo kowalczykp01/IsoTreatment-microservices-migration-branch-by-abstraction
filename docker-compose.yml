@@ -8,13 +8,15 @@ services:
     depends_on:
       monolith.database:
         condition: service_healthy
+      treatment:
+        condition: service_started
     environment:
       - ConnectionStrings__IsoSupportDb=Server=monolith.database,1433;Database=IsoTreatmentProcessSupport;User Id=sa;Password=${MSSQL_SA_PASSWORD};Encrypt=true;TrustServerCertificate=true;
       - Authentication__SigningKey=${AUTHENTICATION_SIGNING_KEY}
       - ASPNETCORE_ENVIRONMENT=Production
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
       - OTEL_SERVICE_NAME=monolith
-      - Features__UseTreatmentServiceForReminders=false
+      - Features__UseTreatmentServiceForReminders=true
       - TreatmentService__BaseAddress=http://treatment:8080/
       - EmailHost
       - EmailUsername
