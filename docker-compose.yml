@@ -14,6 +14,8 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
       - OTEL_SERVICE_NAME=monolith
+      - Features__UseTreatmentServiceForReminders=false
+      - TreatmentService__BaseAddress=http://treatment:8080/
       - EmailHost
       - EmailUsername
       - EmailPassword

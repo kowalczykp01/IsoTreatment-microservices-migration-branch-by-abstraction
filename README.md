@@ -134,9 +134,10 @@ verified by comparing row counts, row contents and identity values on both sides
 ### Phase 6 — the second implementation, behind a flag
 
 `TreatmentServiceReminderGateway` implements `IReminderGateway` by calling the Treatment
-service with `HttpClient`, forwarding the incoming token as a bearer header. Not-found
-responses are translated back into the monolith's own exceptions, so that clients see the
-same status codes and messages as before.
+service with `HttpClient`, forwarding the incoming token as a bearer header. A 404 from the
+Treatment service becomes `null` or `false`, exactly what `EfReminderGateway` returns for a
+missing row, so `ReminderService` raises the same exceptions with the same messages whichever
+implementation is behind the interface.
 
 `Features:UseTreatmentServiceForReminders` selects the implementation when services are
 registered. It defaults to `false`: the code ships, but every request still goes to the
@@ -193,7 +194,7 @@ extraction will have to address with events rather than constraints.
 - [x] **Phase 3** — introduce `IReminderGateway` with the Entity Framework implementation
 - [x] **Phase 4** — the Treatment service with its own database
 - [x] **Phase 5** — one-off copy of the reminder data
-- [ ] **Phase 6** — the HTTP implementation, behind a flag
+- [x] **Phase 6** — the HTTP implementation, behind a flag
 - [ ] **Phase 7** — equivalence tests
 - [ ] **Phase 8** — repeat the data copy and switch reminders to the Treatment service
 - [ ] **Phase 9** — remove the old path from the monolith
@@ -310,6 +311,42 @@ first copy is made into an empty table; the second, immediately before the switc
 has to overwrite it. After the switch the flag is dangerous — the Treatment database is then
 the only copy of any reminder written since, and `--replace` would silently discard it.
 
+## The flag
+
+`Features:UseTreatmentServiceForReminders` decides, when the monolith starts, which
+implementation of `IReminderGateway` it registers:
+
+| Flag | Implementation | Reminders live in |
+| --- | --- | --- |
+| `false` (default) | `EfReminderGateway` | the monolith's database |
+| `true` | `TreatmentServiceReminderGateway` | the Treatment service's database, reached over HTTP |
+
+It is read once, at startup; changing it means restarting the monolith. With the flag on,
+`TreatmentService:BaseAddress` is required as well — Compose already sets it to
+`http://treatment:8080/`.
+
+The token the gateway forwards is the one `JwtBearer` has already validated for the incoming
+request (`SaveToken` is on, so it is available as `access_token`), not a second read of the
+cookie. The gateway does not send the user id: the Treatment service takes it from that
+token, and `ReminderService` has already checked the user exists.
+
+The new path can be tried without touching the running monolith, by starting a second
+instance with the flag on next to it:
+
+```
+docker compose run -d --rm --name bba-flag-on -p 8083:8080 \
+  -e Features__UseTreatmentServiceForReminders=true monolith
+```
+
+`localhost:8080` keeps serving reminders from the monolith's database, `localhost:8083` from
+the Treatment service's, and the same request with the same cookie should get the same
+response from both. Anything written through `8083` exists only in the Treatment database;
+the copy repeated in Phase 8 overwrites it.
+
+```
+docker stop bba-flag-on
+```
+
 ## Distributed tracing
 
 The monolith is instrumented with OpenTelemetry and exports over OTLP to Jaeger at
@@ -343,6 +380,17 @@ sides of `IReminderGateway`, and the join cannot survive that. The extra round t
 price of the seam itself, paid while everything still runs against one database — the
 Strangler Fig migration shows the same two queries, but only once the Treatment service
 took over.
+
+With the flag on, the same request crosses the network and still produces a single trace —
+`HttpClient` instrumentation carries the `traceparent` header into the Treatment service:
+
+```
+monolith   GET api/reminder
+monolith   SELECT [Users]
+monolith   GET                     (HTTP call to the Treatment service)
+treatment  GET api/reminder
+treatment  SELECT [Reminders]
+```
 
 Tracing is not on the critical path. Stopping the Jaeger container leaves every endpoint
 working; exports fail silently in the background.
