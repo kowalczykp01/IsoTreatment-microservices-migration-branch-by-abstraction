@@ -127,8 +127,9 @@ No traffic reaches it yet.
 ### Phase 5 — one-off copy of the reminder data
 
 Existing reminders are copied from the monolith's database into the Treatment service's
-database, preserving their ids, with the identity seed advanced past the highest copied id.
-The copy is verified by comparing row counts on both sides.
+database, preserving their ids, with the identity value set to the monolith's own rather than
+to the highest copied id, so that no id the monolith ever issued is issued again. The copy is
+verified by comparing row counts, row contents and identity values on both sides.
 
 ### Phase 6 — the second implementation, behind a flag
 
@@ -191,7 +192,7 @@ extraction will have to address with events rather than constraints.
 - [x] **Phase 2** — OpenTelemetry instrumentation exported to Jaeger
 - [x] **Phase 3** — introduce `IReminderGateway` with the Entity Framework implementation
 - [x] **Phase 4** — the Treatment service with its own database
-- [ ] **Phase 5** — one-off copy of the reminder data
+- [x] **Phase 5** — one-off copy of the reminder data
 - [ ] **Phase 6** — the HTTP implementation, behind a flag
 - [ ] **Phase 7** — equivalence tests
 - [ ] **Phase 8** — repeat the data copy and switch reminders to the Treatment service
@@ -268,6 +269,46 @@ A 500 on the last one means the database is unreachable or the schema was never 
 | `GET localhost:8082/swagger/index.html` | 200 — the Treatment service started |
 | `GET localhost:8082/api/reminder` with the token in the `Authorization` header | 200 — its database is reachable |
 | `GET localhost:8082/api/reminder` with the token in the `token` cookie | 401 — the service reads the header only |
+
+## Copying the reminder data
+
+`tools/ReminderDataCopy` copies the `Reminders` table from the monolith's database into the
+Treatment service's. It references neither service and talks to both databases in plain SQL,
+so it copies rows, not whatever either model thinks a reminder is. Both schemas have to be
+applied first.
+
+```
+set -a; . ./.env; set +a
+export ConnectionStrings__IsoSupportDb="Server=localhost,14330;Database=IsoTreatmentProcessSupport;User Id=sa;Password=$MSSQL_SA_PASSWORD;Encrypt=true;TrustServerCertificate=true;"
+export ConnectionStrings__TreatmentDb="Server=localhost,14331;Database=Treatment;User Id=sa;Password=$MSSQL_SA_PASSWORD;Encrypt=true;TrustServerCertificate=true;"
+dotnet run --project tools/ReminderDataCopy
+```
+
+```
+Source    6 reminders, ids 3..1006, 3 users, identity 1006
+Target    6 reminders, ids 3..1006, 3 users, identity 1006
+Copied and verified 6 reminders.
+```
+
+What it does, in order:
+
+- reads every reminder and the table's identity value from the monolith in one serializable
+  transaction, so both describe the same moment,
+- in a single transaction on the Treatment side, deletes existing rows, bulk-inserts the
+  snapshot with its original ids, and reseeds the identity to the monolith's value,
+- compares row count, row contents and identity value with the snapshot, and commits only if
+  all three match — otherwise it rolls back and exits non-zero, leaving the target untouched.
+
+Ids are preserved because clients already hold them. The identity is copied rather than
+derived from the highest id because the two can differ considerably: SQL Server caches
+identity values and skips ahead by up to 1000 after an instance restart, and deleted
+reminders leave gaps. Reseeding to `MAX(Id)` would let the Treatment service hand out ids the
+monolith had already issued once.
+
+If the target already holds reminders, the tool refuses to run unless given `--replace`. The
+first copy is made into an empty table; the second, immediately before the switch in Phase 8,
+has to overwrite it. After the switch the flag is dangerous — the Treatment database is then
+the only copy of any reminder written since, and `--replace` would silently discard it.
 
 ## Distributed tracing
 
