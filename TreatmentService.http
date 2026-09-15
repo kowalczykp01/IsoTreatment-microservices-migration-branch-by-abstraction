@@ -56,11 +56,11 @@ Authorization: Bearer {{token}}
 
 
 ### =========================================================================
-### Separate databases
+### One owner of the data
 ###
-### Unlike in the Strangler Fig repository, a reminder written to one service
-### is not visible in the other. The monolith's data reaches the Treatment
-### database only through the copy in Phase 5.
+### Since the switch the monolith has no reminders of its own: whatever goes
+### in through it is stored by the Treatment service. Before Phase 8 the same
+### pair of reads returned different lists, one per database.
 ### =========================================================================
 
 ### Create through the monolith (cookie)
@@ -72,11 +72,11 @@ Cookie: token={{token}}
   "time": "07:45"
 }
 
-### Read through the monolith  ->  contains 07:45
+### Read through the monolith  ->  contains "07:45"
 GET {{monolith}}/api/reminder
 Cookie: token={{token}}
 
-### Read through treatment  ->  does not contain 07:45
+### Read through treatment  ->  contains "07:45:00", the same reminder
 GET {{treatment}}/api/reminder
 Authorization: Bearer {{token}}
 

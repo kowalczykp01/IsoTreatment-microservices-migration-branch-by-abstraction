@@ -15,6 +15,5 @@
 
         public string? ResetPasswordToken { get; set; }
         public virtual ICollection<Entry> Entries { get; set; }
-        public virtual ICollection<Reminder> Reminders { get; set; }
     }
 }

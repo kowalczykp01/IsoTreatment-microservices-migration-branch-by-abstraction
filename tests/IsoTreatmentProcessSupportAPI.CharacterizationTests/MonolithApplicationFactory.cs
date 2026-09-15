@@ -20,24 +20,17 @@ public sealed class MonolithApplicationFactory : WebApplicationFactory<MonolithE
     public const string Audience = "isotreatment-users-audience";
     public const string SigningKey = "Kj9pL2mQ8rT5vW3nY6bC4dF1gH0jA9eZ2xU7yVqW3eR5tY6uI8oP9aS0dF==";
 
-    private readonly WebApplicationFactory<TreatmentServiceEntryPoint>? _treatmentService;
+    private readonly WebApplicationFactory<TreatmentServiceEntryPoint> _treatmentService;
 
-    // Without a Treatment service the monolith runs as configured, flag off. With one, the flag
-    // is turned on exactly as in production and only the transport is replaced: the gateway's
-    // HttpClient reaches the in-memory service instead of a network address.
-    public MonolithApplicationFactory(WebApplicationFactory<TreatmentServiceEntryPoint>? treatmentService = null)
+    // The monolith runs as configured; only the transport is replaced, so the gateway's
+    // HttpClient reaches the in-memory Treatment service instead of a network address.
+    public MonolithApplicationFactory(WebApplicationFactory<TreatmentServiceEntryPoint> treatmentService)
     {
         _treatmentService = treatmentService;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        if (_treatmentService is null)
-        {
-            return;
-        }
-
-        builder.UseSetting("Features:UseTreatmentServiceForReminders", "true");
         builder.UseSetting("TreatmentService:BaseAddress", "http://localhost/");
 
         builder.ConfigureTestServices(services =>

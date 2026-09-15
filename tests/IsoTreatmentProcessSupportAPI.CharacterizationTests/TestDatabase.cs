@@ -14,13 +14,11 @@ public sealed class TestDatabase
     private readonly string _monolithConnectionString;
     private readonly string _remindersConnectionString;
 
-    // Users always live in the monolith's database. Reminders live in whichever database owns
-    // them for the run: the monolith's with the flag off, the Treatment service's with it on.
-    // Both Reminders tables have the same columns, so reminders are handled in plain SQL.
-    public TestDatabase(string monolithConnectionString, string? remindersConnectionString = null)
+    // Users live in the monolith's database, reminders in the Treatment service's.
+    public TestDatabase(string monolithConnectionString, string remindersConnectionString)
     {
         _monolithConnectionString = monolithConnectionString;
-        _remindersConnectionString = remindersConnectionString ?? monolithConnectionString;
+        _remindersConnectionString = remindersConnectionString;
 
         EnsureDatabaseIsDisposable(_monolithConnectionString);
         EnsureDatabaseIsDisposable(_remindersConnectionString);
@@ -45,22 +43,17 @@ public sealed class TestDatabase
 
     public async Task ResetAsync()
     {
-        if (_remindersConnectionString != _monolithConnectionString)
-        {
-            await ExecuteAsync(_remindersConnectionString,
-                """
-                DELETE FROM [Reminders];
-                DBCC CHECKIDENT ('[Reminders]', RESEED, 0);
-                """);
-        }
+        await ExecuteAsync(_remindersConnectionString,
+            """
+            DELETE FROM [Reminders];
+            DBCC CHECKIDENT ('[Reminders]', RESEED, 0);
+            """);
 
         await ExecuteAsync(_monolithConnectionString,
             """
             DELETE FROM [Entries];
-            DELETE FROM [Reminders];
             DELETE FROM [Users];
             DBCC CHECKIDENT ('[Entries]', RESEED, 0);
-            DBCC CHECKIDENT ('[Reminders]', RESEED, 0);
             DBCC CHECKIDENT ('[Users]', RESEED, 0);
             """);
     }

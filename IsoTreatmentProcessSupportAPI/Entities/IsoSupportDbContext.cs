@@ -1,5 +1,4 @@
-﻿using IsoTreatmentProcessSupportAPI.Converters;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 
 namespace IsoTreatmentProcessSupportAPI.Entities
 {
@@ -12,7 +11,6 @@ namespace IsoTreatmentProcessSupportAPI.Entities
 
         public DbSet<User> Users { get; set; }
         public DbSet<Entry> Entries { get; set; }
-        public DbSet<Reminder> Reminders { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -29,13 +27,6 @@ namespace IsoTreatmentProcessSupportAPI.Entities
             modelBuilder.Entity<User>()
                 .Property(u => u.Email)
                 .IsRequired();
-        }
-
-        protected override void ConfigureConventions(ModelConfigurationBuilder builder)
-        {
-            base.ConfigureConventions(builder);
-            builder.Properties<TimeOnly>()
-                .HaveConversion<TimeOnlyConverter>();
         }
     }
 }

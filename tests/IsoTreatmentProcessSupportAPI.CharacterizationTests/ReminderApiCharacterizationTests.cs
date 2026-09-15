@@ -4,29 +4,18 @@ using FluentAssertions;
 
 namespace IsoTreatmentProcessSupportAPI.CharacterizationTests;
 
-// The same tests, the same HTTP requests to the same monolith, run twice: once with the flag
-// off and once with it on. Only where reminders are seeded and inspected differs.
+// The monolith serves reminders through the Treatment service, which here runs in memory with
+// a database of its own. Users stay in the monolith's database; reminders live in Treatment's.
 [Collection(SqlServerCollection.Name)]
-public sealed class RemindersServedFromTheMonolithDatabase(SqlServerFixture fixture)
-    : ReminderApiCharacterizationTests(
-        new TestDatabase(fixture.ConnectionString),
-        new MonolithApplicationFactory());
-
-[Collection(SqlServerCollection.Name)]
-public sealed class RemindersServedThroughTheTreatmentService(SqlServerFixture fixture)
-    : ReminderApiCharacterizationTests(
-        new TestDatabase(fixture.ConnectionString, fixture.TreatmentConnectionString),
-        new MonolithApplicationFactory(fixture.TreatmentService));
-
-public abstract class ReminderApiCharacterizationTests : IAsyncLifetime
+public sealed class ReminderApiCharacterizationTests : IAsyncLifetime
 {
     private readonly TestDatabase _database;
     private readonly MonolithApplicationFactory _factory;
 
-    protected ReminderApiCharacterizationTests(TestDatabase database, MonolithApplicationFactory factory)
+    public ReminderApiCharacterizationTests(SqlServerFixture fixture)
     {
-        _database = database;
-        _factory = factory;
+        _database = new TestDatabase(fixture.ConnectionString, fixture.TreatmentConnectionString);
+        _factory = new MonolithApplicationFactory(fixture.TreatmentService);
     }
 
     public Task InitializeAsync() => _database.ResetAsync();
@@ -144,6 +133,22 @@ public abstract class ReminderApiCharacterizationTests : IAsyncLifetime
 
         (await response.Content.ReadAsStringAsync())
             .Should().Be($$"""{"id":{{stored[0].Id}},"time":"08:00"}""");
+    }
+
+    // Carried over from the equivalence tests removed with EfReminderGateway: the monolith always
+    // stored seconds, while the response shows hours and minutes only.
+    [Fact]
+    public async Task Add_StoresSecondsWhileRespondingWithHoursAndMinutes()
+    {
+        var userId = await _database.SeedUserAsync();
+
+        var response = await ClientFor(userId).PostAsync("/api/reminder", JsonBody("""{"time":"07:05:30"}"""));
+
+        (await _database.GetRemindersAsync()).Should().ContainSingle()
+            .Which.Time.Should().Be(new TimeOnly(7, 5, 30));
+        (await response.Content.ReadAsStringAsync()).Should().EndWith("""
+            "time":"07:05"}
+            """);
     }
 
     [Fact]

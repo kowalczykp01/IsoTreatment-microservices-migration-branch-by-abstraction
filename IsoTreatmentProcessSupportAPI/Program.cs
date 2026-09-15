@@ -70,21 +70,13 @@ builder.Services.AddScoped<IValidator<ResetPasswordDto>, ResetPasswordDtoValidat
 builder.Services.AddTransient<IMailkitService, MailkitService>();
 builder.Services.AddTransient<ITokenService, TokenService>();
 builder.Services.AddScoped<IUserService, UserService>();
-if (builder.Configuration.GetValue<bool>("Features:UseTreatmentServiceForReminders"))
-{
-    var treatmentServiceBaseAddress = builder.Configuration["TreatmentService:BaseAddress"]
-        ?? throw new InvalidOperationException(
-            "Missing 'TreatmentService:BaseAddress' (environment variable: TreatmentService__BaseAddress), "
-            + "required while Features:UseTreatmentServiceForReminders is enabled.");
+var treatmentServiceBaseAddress = builder.Configuration["TreatmentService:BaseAddress"]
+    ?? throw new InvalidOperationException(
+        "Missing 'TreatmentService:BaseAddress' (environment variable: TreatmentService__BaseAddress).");
 
-    builder.Services.AddHttpContextAccessor();
-    builder.Services.AddHttpClient<IReminderGateway, TreatmentServiceReminderGateway>(
-        client => client.BaseAddress = new Uri(treatmentServiceBaseAddress));
-}
-else
-{
-    builder.Services.AddScoped<IReminderGateway, EfReminderGateway>();
-}
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddHttpClient<IReminderGateway, TreatmentServiceReminderGateway>(
+    client => client.BaseAddress = new Uri(treatmentServiceBaseAddress));
 builder.Services.AddScoped<IReminderService, ReminderService>();
 builder.Services.AddScoped<IEntryService, EntryService>();
 builder.Services.AddScoped<ITreatmentProcessService, TreatmentProcessService>();

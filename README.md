@@ -43,11 +43,11 @@ The moving parts:
 
 - the monolith, which stays the only address the frontend talks to — the decision "who
   serves this request" is made inside its code, not at the system boundary,
-- `IReminderGateway`, the abstraction the monolith's reminder logic depends on, with two
-  implementations: one backed by the monolith's own database, one calling the Treatment
-  service over HTTP,
-- a configuration flag, `Features:UseTreatmentServiceForReminders`, choosing between them
-  at dependency-injection time,
+- `IReminderGateway`, the abstraction the monolith's reminder logic depends on, which during
+  the migration had two implementations: one backed by the monolith's own database, one
+  calling the Treatment service over HTTP — only the second is left,
+- a configuration flag, `Features:UseTreatmentServiceForReminders`, which chose between them
+  at dependency-injection time until it was removed with the old implementation,
 - the Treatment service, laid out as Domain, Application, Infrastructure and Api, with a
   **database of its own**,
 - **Jaeger** for distributed tracing, so that the switch is observable rather than asserted,
@@ -188,6 +188,11 @@ removed from the monolith, together with the flag. Unlike in the Strangler Fig m
 physical `Reminders` table in the monolith's database no longer holds the data anyone uses,
 so it can be dropped rather than left in place.
 
+The equivalence tests go with `EfReminderGateway`, since there is nothing left to compare
+against. Their one assertion that nothing else covered — that a time with seconds is stored
+with seconds — moves into the characterization tests, which now run only through the
+Treatment service.
+
 ## Known consequences
 
 Splitting the database removes the foreign key from `Reminders` to `Users` and its cascading
@@ -215,7 +220,7 @@ extraction will have to address with events rather than constraints.
 - [x] **Phase 6** — the HTTP implementation, behind a flag
 - [x] **Phase 7** — equivalence tests
 - [x] **Phase 8** — repeat the data copy and switch reminders to the Treatment service
-- [ ] **Phase 9** — remove the old path from the monolith
+- [x] **Phase 9** — remove the old path from the monolith
 
 ## Running the application
 
@@ -254,8 +259,12 @@ port Compose publishes:
 ```
 set -a; . ./.env; set +a
 ConnectionStrings__IsoSupportDb="Server=localhost,14330;Database=IsoTreatmentProcessSupport;User Id=sa;Password=$MSSQL_SA_PASSWORD;Encrypt=true;TrustServerCertificate=true;" \
+TreatmentService__BaseAddress="http://localhost:8082/" \
   dotnet ef database update --project IsoTreatmentProcessSupportAPI
 ```
+
+The EF tools start the monolith to find its model, and the monolith refuses to start without
+the Treatment service's address; the value is not used for migrations.
 
 The Treatment service has migrations of its own, applied the same way against its own
 instance:
@@ -290,6 +299,10 @@ A 500 on the last one means the database is unreachable or the schema was never 
 | `GET localhost:8082/api/reminder` with the token in the `token` cookie | 401 — the service reads the header only |
 
 ## Copying the reminder data
+
+> Since Phase 9 there is nothing to copy: the source table no longer exists. The tool stays in
+> the repository as a record of how the data was moved. Run now, it fails while reading the
+> monolith's database, before it opens the Treatment database at all.
 
 `tools/ReminderDataCopy` copies the `Reminders` table from the monolith's database into the
 Treatment service's. It references neither service and talks to both databases in plain SQL,
@@ -331,7 +344,10 @@ the only copy of any reminder written since, and `--replace` would silently disc
 
 ## The flag
 
-`Features:UseTreatmentServiceForReminders` decides, when the monolith starts, which
+> The flag and `EfReminderGateway` were removed in Phase 9, so the commands in this section
+> no longer apply to the current code. It describes how the switch worked during the migration.
+
+`Features:UseTreatmentServiceForReminders` decided, when the monolith started, which
 implementation of `IReminderGateway` it registers:
 
 | Flag | Implementation | Reminders live in |
@@ -390,6 +406,35 @@ Rolling back is the reverse: stop the monolith, set the flag to `false`, start i
 written since the switch exist only in the Treatment database and would have to be copied
 back first — the copy tool only goes one way.
 
+## What is left of the monolith
+
+The monolith still serves `/api/reminder` at the same address, with the same cookie, the
+same responses and the same errors — but it no longer stores reminders. What remains of the
+feature there is:
+
+- `ReminderController` and `ReminderService`, which read the token, check that the user
+  exists and turn a missing reminder into `Reminder not found`,
+- `IReminderGateway` with a single implementation, `TreatmentServiceReminderGateway` — kept
+  as an interface, because it states exactly what the monolith needs from the Treatment
+  service and nothing more,
+- `ReminderDto` and `CreateAndUpdateReminderDto`, the contract with the frontend.
+
+The `Reminder` entity, its `DbSet`, the navigation on `User`, the AutoMapper maps and the
+`TimeOnly` value converter are gone. The migration `RemindersOwnedByTreatmentService` drops
+the `Reminders` table, and with it the foreign key to `Users`:
+
+```
+before:  __EFMigrationsHistory, Users, Entries, Reminders
+after:   __EFMigrationsHistory, Users, Entries
+```
+
+Unlike the Strangler Fig migration, which had to empty the generated migration to keep a table
+another service still read, here the drop is exactly what EF Core scaffolded. The migration's
+`Down` would recreate the table, but not its rows.
+
+The responses recorded for every user before the switch were requested again after the code
+was removed and again after the table was dropped, and matched both times.
+
 ## Distributed tracing
 
 The monolith is instrumented with OpenTelemetry and exports over OTLP to Jaeger at
@@ -447,28 +492,12 @@ to be running:
 dotnet test tests/IsoTreatmentProcessSupportAPI.CharacterizationTests
 ```
 
-Every test runs twice, as `RemindersServedFromTheMonolithDatabase` with the flag off and as
-`RemindersServedThroughTheTreatmentService` with it on, against an in-memory Treatment
-service with a database of its own in the same container.
+The monolith runs in memory with an in-memory instance of the real Treatment service behind
+it; the container holds a database for each. They are the same tests that pinned down the
+monolith's behaviour in Phase 0, and they pass against a monolith that no longer stores
+reminders at all.
 
-### Equivalence tests
-
-These run one set of assertions against both implementations of `IReminderGateway`. Every
-test is a theory with two cases, `EntityFramework` and `TreatmentService`:
-
-```
-dotnet test tests/IsoTreatment.GatewayEquivalenceTests
-```
-
-They need Docker as well, but not the Compose stack. One throwaway SQL Server container holds
-two databases: the monolith's schema, used by `EfReminderGateway` directly, and the Treatment
-service's, used by an in-memory instance of the real service started with
-`WebApplicationFactory`, which `TreatmentServiceReminderGateway` calls over HTTP. Before each
-test both sides are seeded with the same reminders, the same ids and the same identity
-value, so assertions name exact results, including the id of a newly added reminder.
-
-The HTTP gateway is given a token for the user it acts for, the way it would receive one from
-an authenticated request in the monolith. Checking that the user exists is not part of the
-gateway and not tested here; the characterization tests cover it.
-
-Fuller technical documentation follows as the implementation progresses.
+During the migration they ran in two variants, with the flag off and on, and a second suite,
+`tests/IsoTreatment.GatewayEquivalenceTests`, ran one set of assertions against both
+implementations of `IReminderGateway`. Both went away in Phase 9 with the implementation they
+compared against; they remain in the history, up to the commit that removed them.
