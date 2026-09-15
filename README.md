@@ -190,7 +190,7 @@ extraction will have to address with events rather than constraints.
 - [x] **Phase 1** — containerize the monolith as it is
 - [x] **Phase 2** — OpenTelemetry instrumentation exported to Jaeger
 - [x] **Phase 3** — introduce `IReminderGateway` with the Entity Framework implementation
-- [ ] **Phase 4** — the Treatment service with its own database
+- [x] **Phase 4** — the Treatment service with its own database
 - [ ] **Phase 5** — one-off copy of the reminder data
 - [ ] **Phase 6** — the HTTP implementation, behind a flag
 - [ ] **Phase 7** — equivalence tests
@@ -199,7 +199,8 @@ extraction will have to address with events rather than constraints.
 
 ## Running the application
 
-Docker is the only prerequisite — the monolith and SQL Server both run in containers.
+Docker is the only prerequisite — the monolith, the Treatment service and both SQL Server
+instances run in containers.
 
 Copy `.env.example` to `.env` and fill it in — it documents every variable Compose
 expects and why. Only the SMTP entries are optional; without them registration and
@@ -210,15 +211,17 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Compose waits for SQL Server to report healthy before it starts the monolith, so the first
-run takes about a minute. On Apple Silicon the database runs under emulation; the Compose
-file pins it to `linux/amd64` because SQL Server has no arm64 image.
+Compose waits for each SQL Server to report healthy before it starts the service that uses
+it, so the first run takes about a minute. On Apple Silicon the databases run under
+emulation; the Compose file pins them to `linux/amd64` because SQL Server has no arm64 image.
 
 | Address | What |
 | --- | --- |
 | `localhost:8080` | the monolith — the address the frontend uses, before and after the migration |
+| `localhost:8082` | the Treatment service directly; in normal operation only the monolith calls it |
 | `localhost:16686` | Jaeger UI |
 | `localhost:14330` | the monolith's SQL Server |
+| `localhost:14331` | the Treatment service's SQL Server — a separate instance, not a second database on the first |
 
 The ports match the Strangler Fig repository, where `8080` is the gateway, so the two stacks
 cannot run at the same time. Stop one with `docker compose stop` before starting the other.
@@ -234,8 +237,21 @@ ConnectionStrings__IsoSupportDb="Server=localhost,14330;Database=IsoTreatmentPro
   dotnet ef database update --project IsoTreatmentProcessSupportAPI
 ```
 
+The Treatment service has migrations of its own, applied the same way against its own
+instance:
+
+```
+set -a; . ./.env; set +a
+ConnectionStrings__TreatmentDb="Server=localhost,14331;Database=Treatment;User Id=sa;Password=$MSSQL_SA_PASSWORD;Encrypt=true;TrustServerCertificate=true;" \
+  dotnet ef database update --project TreatmentService/TreatmentService.Infrastructure \
+  --startup-project TreatmentService/TreatmentService.Api
+```
+
+Its schema holds a single `Reminders` table, shaped like the monolith's but without the
+foreign key to `Users`, which does not exist on that side.
+
 This needs the EF Core tools (`dotnet tool install --global dotnet-ef`) and has to be repeated
-whenever the `mssql-data` volume is removed.
+whenever the `mssql-data` or `treatment-mssql-data` volume is removed.
 
 ### Checking that it works
 
@@ -246,6 +262,12 @@ whenever the `mssql-data` volume is removed.
 | `POST localhost:8080/api/user/login` with unknown credentials | 400 — the application reached the database |
 
 A 500 on the last one means the database is unreachable or the schema was never applied.
+
+| Request | Expected |
+| --- | --- |
+| `GET localhost:8082/swagger/index.html` | 200 — the Treatment service started |
+| `GET localhost:8082/api/reminder` with the token in the `Authorization` header | 200 — its database is reachable |
+| `GET localhost:8082/api/reminder` with the token in the `token` cookie | 401 — the service reads the header only |
 
 ## Distributed tracing
 

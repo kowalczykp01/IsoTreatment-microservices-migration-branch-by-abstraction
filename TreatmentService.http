@@ -1,0 +1,94 @@
+### =========================================================================
+### Treatment service - requests straight to the service
+###
+###   @treatment :8082   the Treatment service, own database (treatment.database)
+###   @monolith  :8080   the monolith, for comparing the two databases
+###
+### The Treatment service reads the JWT from the Authorization header only,
+### because its sole caller is the monolith. Mint a token as described at the
+### top of IsoTreatment.http. It never checks whether the user exists: it
+### trusts the user id in the token the monolith has already validated.
+### =========================================================================
+
+@monolith = http://localhost:8080
+@treatment = http://localhost:8082
+@token = PASTE_TOKEN_HERE
+
+### Swagger  ->  200
+GET {{treatment}}/swagger/index.html
+
+### Reminders without a token  ->  401
+GET {{treatment}}/api/reminder
+
+### List  ->  200
+GET {{treatment}}/api/reminder
+Authorization: Bearer {{token}}
+
+### Create  ->  200 {"id":N,"time":"08:00"}
+POST {{treatment}}/api/reminder
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "time": "08:00"
+}
+
+### Get one  ->  200
+GET {{treatment}}/api/reminder/1
+Authorization: Bearer {{token}}
+
+### Update  ->  200
+PUT {{treatment}}/api/reminder/1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "time": "21:15"
+}
+
+### Delete  ->  204
+DELETE {{treatment}}/api/reminder/1
+Authorization: Bearer {{token}}
+
+### Missing reminder  ->  404 "Reminder not found", plain text, no Content-Type
+GET {{treatment}}/api/reminder/999999
+Authorization: Bearer {{token}}
+
+
+### =========================================================================
+### Separate databases
+###
+### Unlike in the Strangler Fig repository, a reminder written to one service
+### is not visible in the other. The monolith's data reaches the Treatment
+### database only through the copy in Phase 5.
+### =========================================================================
+
+### Create through the monolith (cookie)
+POST {{monolith}}/api/reminder
+Content-Type: application/json
+Cookie: token={{token}}
+
+{
+  "time": "07:45"
+}
+
+### Read through the monolith  ->  contains 07:45
+GET {{monolith}}/api/reminder
+Cookie: token={{token}}
+
+### Read through treatment  ->  does not contain 07:45
+GET {{treatment}}/api/reminder
+Authorization: Bearer {{token}}
+
+
+### =========================================================================
+### Authentication edge cases
+### =========================================================================
+
+### Token in the cookie  ->  401, the service does not read cookies
+GET {{treatment}}/api/reminder
+Cookie: token={{token}}
+
+### Malformed token  ->  401
+GET {{treatment}}/api/reminder
+Authorization: Bearer not.a.jwt
