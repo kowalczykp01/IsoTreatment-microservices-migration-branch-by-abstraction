@@ -2,19 +2,23 @@ using FluentValidation;
 using FluentValidation.AspNetCore;
 using IsoTreatmentProcessSupportAPI;
 using IsoTreatmentProcessSupportAPI.Entities;
+using IsoTreatmentProcessSupportAPI.Gateways;
 using IsoTreatmentProcessSupportAPI.Middlewares;
 using IsoTreatmentProcessSupportAPI.Models;
 using IsoTreatmentProcessSupportAPI.Models.Validators;
 using IsoTreatmentProcessSupportAPI.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using NLog.Web;
+using OpenTelemetry.Trace;
 using System.Reflection;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Logging.ClearProviders();
 builder.Host.UseNLog();
 
 // Add services to the container.
@@ -51,7 +55,12 @@ builder.Services.AddAuthentication(option =>
 
 builder.Services.AddSingleton(authenticationSettings);
 builder.Services.AddControllers().AddFluentValidation();
-builder.Services.AddDbContext<IsoSupportDbContext>();
+var connectionString = builder.Configuration.GetConnectionString("IsoSupportDb")
+    ?? throw new InvalidOperationException(
+        "Missing connection string 'ConnectionStrings:IsoSupportDb' "
+        + "(environment variable: ConnectionStrings__IsoSupportDb).");
+
+builder.Services.AddDbContext<IsoSupportDbContext>(options => options.UseSqlServer(connectionString));
 builder.Services.AddAutoMapper(Assembly.GetExecutingAssembly());
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
@@ -61,6 +70,13 @@ builder.Services.AddScoped<IValidator<ResetPasswordDto>, ResetPasswordDtoValidat
 builder.Services.AddTransient<IMailkitService, MailkitService>();
 builder.Services.AddTransient<ITokenService, TokenService>();
 builder.Services.AddScoped<IUserService, UserService>();
+var treatmentServiceBaseAddress = builder.Configuration["TreatmentService:BaseAddress"]
+    ?? throw new InvalidOperationException(
+        "Missing 'TreatmentService:BaseAddress' (environment variable: TreatmentService__BaseAddress).");
+
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddHttpClient<IReminderGateway, TreatmentServiceReminderGateway>(
+    client => client.BaseAddress = new Uri(treatmentServiceBaseAddress));
 builder.Services.AddScoped<IReminderService, ReminderService>();
 builder.Services.AddScoped<IEntryService, EntryService>();
 builder.Services.AddScoped<ITreatmentProcessService, TreatmentProcessService>();
@@ -75,6 +91,13 @@ builder.Services.AddCors(options =>
     .WithOrigins("http://localhost:5173")
     );
 });
+
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddOtlpExporter()
+        .AddSqlClientInstrumentation());
 
 var app = builder.Build();
 
@@ -97,3 +120,5 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+public partial class Program { }

@@ -43,11 +43,11 @@ The moving parts:
 
 - the monolith, which stays the only address the frontend talks to — the decision "who
   serves this request" is made inside its code, not at the system boundary,
-- `IReminderGateway`, the abstraction the monolith's reminder logic depends on, with two
-  implementations: one backed by the monolith's own database, one calling the Treatment
-  service over HTTP,
-- a configuration flag, `Features:UseTreatmentServiceForReminders`, choosing between them
-  at dependency-injection time,
+- `IReminderGateway`, the abstraction the monolith's reminder logic depends on, which during
+  the migration had two implementations: one backed by the monolith's own database, one
+  calling the Treatment service over HTTP — only the second is left,
+- a configuration flag, `Features:UseTreatmentServiceForReminders`, which chose between them
+  at dependency-injection time until it was removed with the old implementation,
 - the Treatment service, laid out as Domain, Application, Infrastructure and Api, with a
   **database of its own**,
 - **Jaeger** for distributed tracing, so that the switch is observable rather than asserted,
@@ -127,15 +127,17 @@ No traffic reaches it yet.
 ### Phase 5 — one-off copy of the reminder data
 
 Existing reminders are copied from the monolith's database into the Treatment service's
-database, preserving their ids, with the identity seed advanced past the highest copied id.
-The copy is verified by comparing row counts on both sides.
+database, preserving their ids, with the identity value set to the monolith's own rather than
+to the highest copied id, so that no id the monolith ever issued is issued again. The copy is
+verified by comparing row counts, row contents and identity values on both sides.
 
 ### Phase 6 — the second implementation, behind a flag
 
 `TreatmentServiceReminderGateway` implements `IReminderGateway` by calling the Treatment
-service with `HttpClient`, forwarding the incoming token as a bearer header. Not-found
-responses are translated back into the monolith's own exceptions, so that clients see the
-same status codes and messages as before.
+service with `HttpClient`, forwarding the incoming token as a bearer header. A 404 from the
+Treatment service becomes `null` or `false`, exactly what `EfReminderGateway` returns for a
+missing row, so `ReminderService` raises the same exceptions with the same messages whichever
+implementation is behind the interface.
 
 `Features:UseTreatmentServiceForReminders` selects the implementation when services are
 registered. It defaults to `false`: the code ships, but every request still goes to the
@@ -147,6 +149,14 @@ Because both implementations sit behind the same interface, one set of assertion
 against both of them: the Entity Framework gateway against a test database, and the HTTP
 gateway against a test instance of the Treatment service, each seeded with identical data.
 A difference between the two fails the same test that passes for the other.
+
+The first run found one. Times crossed the HTTP boundary in the frontend's `"HH:mm"` format,
+so a reminder added for `07:05:30` was stored as `07:05:30` by the Entity Framework gateway
+and as `07:05:00` by the HTTP one. No client could have noticed — the monolith formats times
+as `"HH:mm"` on the way out either way, which is why neither the characterization tests nor
+the side-by-side comparison in Phase 6 caught it — but the data stored differed. The
+Treatment service and the gateway now exchange times with full precision; the format the
+frontend sees is unchanged.
 
 ### Phase 8 — switch reminders to the Treatment service
 
@@ -161,12 +171,27 @@ Rolling back is turning the flag off again, with one caveat that the Strangler F
 did not have: reminders written to the Treatment service after the switch exist only in its
 database.
 
+In the characterization tests this required changing where reminders are seeded and
+inspected, never what is asserted. The test class became a base with two variants that
+share every test: one with the flag off, reading and writing reminders in the monolith's
+database, and one with the flag on, where the monolith calls an in-memory instance of the
+real Treatment service and reminders live in its database. Users stay in the monolith's
+database in both.
+
+The monolith is stopped for the copy. Without that, a reminder written between the copy and
+the restart would land in the database the monolith is about to stop reading.
+
 ### Phase 9 — remove the old path
 
 `EfReminderGateway`, the `Reminder` entity and its mapping in `IsoSupportDbContext` are
 removed from the monolith, together with the flag. Unlike in the Strangler Fig migration, the
 physical `Reminders` table in the monolith's database no longer holds the data anyone uses,
 so it can be dropped rather than left in place.
+
+The equivalence tests go with `EfReminderGateway`, since there is nothing left to compare
+against. Their one assertion that nothing else covered — that a time with seconds is stored
+with seconds — moves into the characterization tests, which now run only through the
+Treatment service.
 
 ## Known consequences
 
@@ -186,15 +211,293 @@ extraction will have to address with events rather than constraints.
 
 ## Progress
 
-- [ ] **Phase 0** — characterization tests around the reminder API
-- [ ] **Phase 1** — containerize the monolith as it is
-- [ ] **Phase 2** — OpenTelemetry instrumentation exported to Jaeger
-- [ ] **Phase 3** — introduce `IReminderGateway` with the Entity Framework implementation
-- [ ] **Phase 4** — the Treatment service with its own database
-- [ ] **Phase 5** — one-off copy of the reminder data
-- [ ] **Phase 6** — the HTTP implementation, behind a flag
-- [ ] **Phase 7** — equivalence tests
-- [ ] **Phase 8** — repeat the data copy and switch reminders to the Treatment service
-- [ ] **Phase 9** — remove the old path from the monolith
+- [x] **Phase 0** — characterization tests around the reminder API
+- [x] **Phase 1** — containerize the monolith as it is
+- [x] **Phase 2** — OpenTelemetry instrumentation exported to Jaeger
+- [x] **Phase 3** — introduce `IReminderGateway` with the Entity Framework implementation
+- [x] **Phase 4** — the Treatment service with its own database
+- [x] **Phase 5** — one-off copy of the reminder data
+- [x] **Phase 6** — the HTTP implementation, behind a flag
+- [x] **Phase 7** — equivalence tests
+- [x] **Phase 8** — repeat the data copy and switch reminders to the Treatment service
+- [x] **Phase 9** — remove the old path from the monolith
 
-Fuller technical documentation follows as the implementation progresses.
+## Running the application
+
+Docker is the only prerequisite — the monolith, the Treatment service and both SQL Server
+instances run in containers.
+
+Copy `.env.example` to `.env` and fill it in — it documents every variable Compose
+expects and why. Only the SMTP entries are optional; without them registration and
+password reset return 500, and nothing else is affected.
+
+```
+cp .env.example .env
+docker compose up -d --build
+```
+
+Compose waits for each SQL Server to report healthy before it starts the service that uses
+it, so the first run takes about a minute. On Apple Silicon the databases run under
+emulation; the Compose file pins them to `linux/amd64` because SQL Server has no arm64 image.
+
+| Address | What |
+| --- | --- |
+| `localhost:8080` | the monolith — the address the frontend uses, before and after the migration |
+| `localhost:8082` | the Treatment service directly; in normal operation only the monolith calls it |
+| `localhost:16686` | Jaeger UI |
+| `localhost:14330` | the monolith's SQL Server |
+| `localhost:14331` | the Treatment service's SQL Server — a separate instance, not a second database on the first |
+
+The ports match the Strangler Fig repository, where `8080` is the gateway, so the two stacks
+cannot run at the same time. Stop one with `docker compose stop` before starting the other.
+
+### Applying the database schema
+
+The schema is not created automatically. Apply the migrations from the host, against the
+port Compose publishes:
+
+```
+set -a; . ./.env; set +a
+ConnectionStrings__IsoSupportDb="Server=localhost,14330;Database=IsoTreatmentProcessSupport;User Id=sa;Password=$MSSQL_SA_PASSWORD;Encrypt=true;TrustServerCertificate=true;" \
+TreatmentService__BaseAddress="http://localhost:8082/" \
+  dotnet ef database update --project IsoTreatmentProcessSupportAPI
+```
+
+The EF tools start the monolith to find its model, and the monolith refuses to start without
+the Treatment service's address; the value is not used for migrations.
+
+The Treatment service has migrations of its own, applied the same way against its own
+instance:
+
+```
+set -a; . ./.env; set +a
+ConnectionStrings__TreatmentDb="Server=localhost,14331;Database=Treatment;User Id=sa;Password=$MSSQL_SA_PASSWORD;Encrypt=true;TrustServerCertificate=true;" \
+  dotnet ef database update --project TreatmentService/TreatmentService.Infrastructure \
+  --startup-project TreatmentService/TreatmentService.Api
+```
+
+Its schema holds a single `Reminders` table, shaped like the monolith's but without the
+foreign key to `Users`, which does not exist on that side.
+
+This needs the EF Core tools (`dotnet tool install --global dotnet-ef`) and has to be repeated
+whenever the `mssql-data` or `treatment-mssql-data` volume is removed.
+
+### Checking that it works
+
+| Request | Expected |
+| --- | --- |
+| `GET localhost:8080/swagger/index.html` | 200 — the application started |
+| `GET localhost:8080/api/reminder` | 401 — routing and authentication are wired |
+| `POST localhost:8080/api/user/login` with unknown credentials | 400 — the application reached the database |
+
+A 500 on the last one means the database is unreachable or the schema was never applied.
+
+| Request | Expected |
+| --- | --- |
+| `GET localhost:8082/swagger/index.html` | 200 — the Treatment service started |
+| `GET localhost:8082/api/reminder` with the token in the `Authorization` header | 200 — its database is reachable |
+| `GET localhost:8082/api/reminder` with the token in the `token` cookie | 401 — the service reads the header only |
+
+## Copying the reminder data
+
+> Since Phase 9 there is nothing to copy: the source table no longer exists. The tool stays in
+> the repository as a record of how the data was moved. Run now, it fails while reading the
+> monolith's database, before it opens the Treatment database at all.
+
+`tools/ReminderDataCopy` copies the `Reminders` table from the monolith's database into the
+Treatment service's. It references neither service and talks to both databases in plain SQL,
+so it copies rows, not whatever either model thinks a reminder is. Both schemas have to be
+applied first.
+
+```
+set -a; . ./.env; set +a
+export ConnectionStrings__IsoSupportDb="Server=localhost,14330;Database=IsoTreatmentProcessSupport;User Id=sa;Password=$MSSQL_SA_PASSWORD;Encrypt=true;TrustServerCertificate=true;"
+export ConnectionStrings__TreatmentDb="Server=localhost,14331;Database=Treatment;User Id=sa;Password=$MSSQL_SA_PASSWORD;Encrypt=true;TrustServerCertificate=true;"
+dotnet run --project tools/ReminderDataCopy
+```
+
+```
+Source    6 reminders, ids 3..1006, 3 users, identity 1006
+Target    6 reminders, ids 3..1006, 3 users, identity 1006
+Copied and verified 6 reminders.
+```
+
+What it does, in order:
+
+- reads every reminder and the table's identity value from the monolith in one serializable
+  transaction, so both describe the same moment,
+- in a single transaction on the Treatment side, deletes existing rows, bulk-inserts the
+  snapshot with its original ids, and reseeds the identity to the monolith's value,
+- compares row count, row contents and identity value with the snapshot, and commits only if
+  all three match — otherwise it rolls back and exits non-zero, leaving the target untouched.
+
+Ids are preserved because clients already hold them. The identity is copied rather than
+derived from the highest id because the two can differ considerably: SQL Server caches
+identity values and skips ahead by up to 1000 after an instance restart, and deleted
+reminders leave gaps. Reseeding to `MAX(Id)` would let the Treatment service hand out ids the
+monolith had already issued once.
+
+If the target already holds reminders, the tool refuses to run unless given `--replace`. The
+first copy is made into an empty table; the second, immediately before the switch in Phase 8,
+has to overwrite it. After the switch the flag is dangerous — the Treatment database is then
+the only copy of any reminder written since, and `--replace` would silently discard it.
+
+## The flag
+
+> The flag and `EfReminderGateway` were removed in Phase 9, so the commands in this section
+> no longer apply to the current code. It describes how the switch worked during the migration.
+
+`Features:UseTreatmentServiceForReminders` decided, when the monolith started, which
+implementation of `IReminderGateway` it registers:
+
+| Flag | Implementation | Reminders live in |
+| --- | --- | --- |
+| `false` (default in `appsettings.json`) | `EfReminderGateway` | the monolith's database |
+| `true` (set in `docker-compose.yml` since Phase 8) | `TreatmentServiceReminderGateway` | the Treatment service's database, reached over HTTP |
+
+It is read once, at startup; changing it means restarting the monolith. With the flag on,
+`TreatmentService:BaseAddress` is required as well — Compose already sets it to
+`http://treatment:8080/`.
+
+The token the gateway forwards is the one `JwtBearer` has already validated for the incoming
+request (`SaveToken` is on, so it is available as `access_token`), not a second read of the
+cookie. The gateway does not send the user id: the Treatment service takes it from that
+token, and `ReminderService` has already checked the user exists.
+
+The new path can be tried without touching the running monolith, by starting a second
+instance with the flag on next to it:
+
+```
+docker compose run -d --rm --name bba-flag-on -p 8083:8080 \
+  -e Features__UseTreatmentServiceForReminders=true monolith
+```
+
+`localhost:8080` keeps serving reminders from the monolith's database, `localhost:8083` from
+the Treatment service's, and the same request with the same cookie should get the same
+response from both. Anything written through `8083` exists only in the Treatment database;
+the copy repeated in Phase 8 overwrites it.
+
+```
+docker stop bba-flag-on
+```
+
+### Switching
+
+The switch was made in this order, and a repeat of it — or a rollback — should follow the
+same one:
+
+```
+docker compose stop monolith                                     # no more writes to the old database
+dotnet run --project tools/ReminderDataCopy -- --replace         # the second copy, see "Copying the reminder data"
+# docker-compose.yml: Features__UseTreatmentServiceForReminders=true
+docker compose up -d monolith
+```
+
+The monolith, and with it the whole API, is unavailable for as long as the copy takes —
+seconds for this data set. That is the price of a consistent copy without dual writes, and a
+difference from the Strangler Fig switch, which needed no downtime because both services
+shared one database.
+
+Before the switch the reminder lists of all users were recorded through `localhost:8080`;
+after it the same requests returned byte-identical responses. A reminder created afterwards
+was stored in the Treatment database and not in the monolith's.
+
+Rolling back is the reverse: stop the monolith, set the flag to `false`, start it. Reminders
+written since the switch exist only in the Treatment database and would have to be copied
+back first — the copy tool only goes one way.
+
+## What is left of the monolith
+
+The monolith still serves `/api/reminder` at the same address, with the same cookie, the
+same responses and the same errors — but it no longer stores reminders. What remains of the
+feature there is:
+
+- `ReminderController` and `ReminderService`, which read the token, check that the user
+  exists and turn a missing reminder into `Reminder not found`,
+- `IReminderGateway` with a single implementation, `TreatmentServiceReminderGateway` — kept
+  as an interface, because it states exactly what the monolith needs from the Treatment
+  service and nothing more,
+- `ReminderDto` and `CreateAndUpdateReminderDto`, the contract with the frontend.
+
+The `Reminder` entity, its `DbSet`, the navigation on `User`, the AutoMapper maps and the
+`TimeOnly` value converter are gone. The migration `RemindersOwnedByTreatmentService` drops
+the `Reminders` table, and with it the foreign key to `Users`:
+
+```
+before:  __EFMigrationsHistory, Users, Entries, Reminders
+after:   __EFMigrationsHistory, Users, Entries
+```
+
+Unlike the Strangler Fig migration, which had to empty the generated migration to keep a table
+another service still read, here the drop is exactly what EF Core scaffolded. The migration's
+`Down` would recreate the table, but not its rows.
+
+The responses recorded for every user before the switch were requested again after the code
+was removed and again after the table was dropped, and matched both times.
+
+## Distributed tracing
+
+The monolith is instrumented with OpenTelemetry and exports over OTLP to Jaeger at
+`localhost:16686`. The service name and the exporter endpoint come from environment
+variables in the Compose file — the OpenTelemetry SDK reads `OTEL_SERVICE_NAME` and
+`OTEL_EXPORTER_OTLP_ENDPOINT` by itself, so neither appears in application code.
+
+Instrumentation went in before any reminder code changed, so that a reminder request served
+entirely in-process is on record:
+
+```
+monolith  GET api/reminder
+monolith  SELECT [u].[Id] ...
+```
+
+One request, one SQL query: `ReminderService` loads reminders through
+`Users.Include(u => u.Reminders)`, a join that only works while reminders and users live in
+the same database.
+
+Introducing the abstraction in Phase 3 changed that, before any request left the process:
+
+```
+monolith  GET api/reminder
+monolith  SELECT [Users]
+monolith  SELECT [Reminders]
+```
+
+The client sent the same request and got the same response; the characterization tests pass
+unmodified. But checking the user and reading reminders are now two separate steps on two
+sides of `IReminderGateway`, and the join cannot survive that. The extra round trip is the
+price of the seam itself, paid while everything still runs against one database — the
+Strangler Fig migration shows the same two queries, but only once the Treatment service
+took over.
+
+With the flag on, the same request crosses the network and still produces a single trace —
+`HttpClient` instrumentation carries the `traceparent` header into the Treatment service:
+
+```
+monolith   GET api/reminder
+monolith   SELECT [Users]
+monolith   GET                     (HTTP call to the Treatment service)
+treatment  GET api/reminder
+treatment  SELECT [Reminders]
+```
+
+Tracing is not on the critical path. Stopping the Jaeger container leaves every endpoint
+working; exports fail silently in the background.
+
+## Running the tests
+
+The characterization tests start a real SQL Server in a throwaway container, so Docker has
+to be running:
+
+```
+dotnet test tests/IsoTreatmentProcessSupportAPI.CharacterizationTests
+```
+
+The monolith runs in memory with an in-memory instance of the real Treatment service behind
+it; the container holds a database for each. They are the same tests that pinned down the
+monolith's behaviour in Phase 0, and they pass against a monolith that no longer stores
+reminders at all.
+
+During the migration they ran in two variants, with the flag off and on, and a second suite,
+`tests/IsoTreatment.GatewayEquivalenceTests`, ran one set of assertions against both
+implementations of `IReminderGateway`. Both went away in Phase 9 with the implementation they
+compared against; they remain in the history, up to the commit that removed them.

@@ -17,10 +17,10 @@ namespace IsoTreatmentProcessSupportAPI.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "6.0.20")
+                .HasAnnotation("ProductVersion", "8.0.11")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
-            SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder, 1L, 1);
+            SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
             modelBuilder.Entity("IsoTreatmentProcessSupportAPI.Entities.Entry", b =>
                 {
@@ -28,7 +28,7 @@ namespace IsoTreatmentProcessSupportAPI.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int");
 
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"), 1L, 1);
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<string>("Content")
                         .IsRequired()
@@ -47,34 +47,13 @@ namespace IsoTreatmentProcessSupportAPI.Migrations
                     b.ToTable("Entries");
                 });
 
-            modelBuilder.Entity("IsoTreatmentProcessSupportAPI.Entities.Reminder", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"), 1L, 1);
-
-                    b.Property<TimeSpan>("Time")
-                        .HasColumnType("time");
-
-                    b.Property<int>("UserId")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId");
-
-                    b.ToTable("Reminders");
-                });
-
             modelBuilder.Entity("IsoTreatmentProcessSupportAPI.Entities.User", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int");
 
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"), 1L, 1);
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<int>("ClimaxDoseInMiligramsPerKilogramOfBodyWeight")
                         .HasColumnType("int");
@@ -128,22 +107,9 @@ namespace IsoTreatmentProcessSupportAPI.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("IsoTreatmentProcessSupportAPI.Entities.Reminder", b =>
-                {
-                    b.HasOne("IsoTreatmentProcessSupportAPI.Entities.User", "User")
-                        .WithMany("Reminders")
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("User");
-                });
-
             modelBuilder.Entity("IsoTreatmentProcessSupportAPI.Entities.User", b =>
                 {
                     b.Navigation("Entries");
-
-                    b.Navigation("Reminders");
                 });
 #pragma warning restore 612, 618
         }

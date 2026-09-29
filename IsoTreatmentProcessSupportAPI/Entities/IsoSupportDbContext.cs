@@ -1,14 +1,16 @@
-﻿using IsoTreatmentProcessSupportAPI.Converters;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 
 namespace IsoTreatmentProcessSupportAPI.Entities
 {
     public class IsoSupportDbContext : DbContext
     {
-        private string _connectionString = "Server=localhost;Database=IsoTreatmentProcessSupport;User Id=sa;Password=boxsy2-xobpyp-tonmUs;Encrypt=true;TrustServerCertificate=true;";
+        public IsoSupportDbContext(DbContextOptions<IsoSupportDbContext> options)
+            : base(options)
+        {
+        }
+
         public DbSet<User> Users { get; set; }
         public DbSet<Entry> Entries { get; set; }
-        public DbSet<Reminder> Reminders { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -25,18 +27,6 @@ namespace IsoTreatmentProcessSupportAPI.Entities
             modelBuilder.Entity<User>()
                 .Property(u => u.Email)
                 .IsRequired();
-        }
-
-        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-        {
-            optionsBuilder.UseSqlServer(_connectionString);
-        }
-
-        protected override void ConfigureConventions(ModelConfigurationBuilder builder)
-        {
-            base.ConfigureConventions(builder);
-            builder.Properties<TimeOnly>()
-                .HaveConversion<TimeOnlyConverter>();
         }
     }
 }

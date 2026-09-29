@@ -1,0 +1,242 @@
+### =========================================================================
+### IsoTreatment - requests for the Branch by Abstraction migration stack
+###
+### Stack:  docker compose up -d --build
+###   @monolith :8080   the monolith - the address the frontend uses, before
+###                     and after the migration; there is no gateway
+###   Jaeger UI http://localhost:16686
+###
+### The API reads the JWT from an HttpOnly cookie named "token".
+###
+### To mint a token without going through registration (user id 1),
+### run from the repository root:
+###
+###   set -a; . ./.env; set +a
+###   b64u() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+###   H=$(printf '%s' '{"alg":"HS256","typ":"JWT"}' | b64u)
+###   P=$(printf '{"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier":"1","exp":%s,"iss":"isotreatment-users-issuer","aud":"isotreatment-users-audience"}' $(( $(date +%s) + 3600 )) | b64u)
+###   S=$(printf '%s' "$H.$P" | openssl dgst -sha256 -hmac "$AUTHENTICATION_SIGNING_KEY" -binary | b64u)
+###   echo "$H.$P.$S"
+###
+### The claim type is the full URI, not the short "nameid"; a token using
+### "nameid" passes validation and then fails to yield a user id.
+### =========================================================================
+
+@monolith = http://localhost:8080
+@token = PASTE_TOKEN_HERE
+
+
+### =========================================================================
+### 1. Smoke tests - no authentication required
+### =========================================================================
+
+### Swagger is up  ->  200
+GET {{monolith}}/swagger/index.html
+
+### No cookie  ->  401, proves authentication is wired
+GET {{monolith}}/api/reminder
+
+### Unknown path  ->  404
+GET {{monolith}}/nie-ma-takiej-sciezki
+
+### Unknown credentials  ->  400 "Invalid username or password"
+### A 500 here means the database is unreachable or migrations never ran.
+POST {{monolith}}/api/user/login
+Content-Type: application/json
+
+{
+  "email": "brak@example.com",
+  "password": "brak"
+}
+
+
+### =========================================================================
+### 2. User lifecycle
+###
+### Registration sends a confirmation e-mail (SMTP settings come from .env)
+### and leaves EmailConfirmed = false, so login fails until the account is
+### confirmed. For local work it is easier to seed a user with SQL and mint
+### a token (see the header of this file).
+### =========================================================================
+
+### Register  ->  200
+POST {{monolith}}/api/user/register
+Content-Type: application/json
+
+{
+  "firstName": "Jan",
+  "lastName": "Kowalski",
+  "email": "jan.kowalski@example.com",
+  "password": "Haslo123!",
+  "confirmPassword": "Haslo123!",
+  "weight": 70,
+  "climaxDoseInMiligramsPerKilogramOfBodyWeight": 120,
+  "dailyDose": 40,
+  "medicationStartDate": "2024-01-01T00:00:00"
+}
+
+### Confirm the e-mail (token arrives by e-mail)
+POST {{monolith}}/api/user/confirmEmail?emailConfirmationToken=PASTE_CONFIRMATION_TOKEN
+
+### Log in - the JWT comes back in a Set-Cookie header, not in the body
+# @name login
+POST {{monolith}}/api/user/login
+Content-Type: application/json
+
+{
+  "email": "jan.kowalski@example.com",
+  "password": "Haslo123!"
+}
+
+### Current user  ->  200
+GET {{monolith}}/api/user/info
+Cookie: token={{token}}
+
+### Update the current user  ->  200
+POST {{monolith}}/api/user/info/update
+Content-Type: application/json
+Cookie: token={{token}}
+
+{
+  "firstName": "Jan",
+  "lastName": "Nowak",
+  "email": "jan.kowalski@example.com",
+  "weight": 72,
+  "climaxDoseInMiligramsPerKilogramOfBodyWeight": 120,
+  "dailyDose": 40
+}
+
+### Log out - clears the cookie
+POST {{monolith}}/api/user/logout
+Cookie: token={{token}}
+
+
+### =========================================================================
+### 3. Reminders
+###
+### This is the slice being extracted into the Treatment service. The same
+### requests keep working unchanged through every phase: after the switch
+### the monolith forwards them to the Treatment service behind
+### IReminderGateway, and nothing here should notice.
+### Note: POST returns 200 with no Location header, not 201.
+### Time serializes as "08:00" (pl-PL culture), not "08:00:00".
+### =========================================================================
+
+### List  ->  200
+GET {{monolith}}/api/reminder
+Cookie: token={{token}}
+
+### Create  ->  200 {"id":N,"time":"08:00"}
+POST {{monolith}}/api/reminder
+Content-Type: application/json
+Cookie: token={{token}}
+
+{
+  "time": "08:00"
+}
+
+### Read one  ->  200
+GET {{monolith}}/api/reminder/1
+Cookie: token={{token}}
+
+### Update  ->  200
+PUT {{monolith}}/api/reminder/1
+Content-Type: application/json
+Cookie: token={{token}}
+
+{
+  "time": "21:15"
+}
+
+### Delete  ->  204 with an empty body
+DELETE {{monolith}}/api/reminder/1
+Cookie: token={{token}}
+
+### Missing reminder  ->  404 "Reminder not found", plain text, no Content-Type
+GET {{monolith}}/api/reminder/999999
+Cookie: token={{token}}
+
+
+### =========================================================================
+### 4. Diary entries
+### =========================================================================
+
+### List  ->  200
+GET {{monolith}}/api/entry
+Cookie: token={{token}}
+
+### Create  ->  200
+POST {{monolith}}/api/entry
+Content-Type: application/json
+Cookie: token={{token}}
+
+{
+  "content": "Skin looks better, no side effects today.",
+  "date": "2026-08-28T00:00:00"
+}
+
+### Update  ->  200
+PUT {{monolith}}/api/entry/1
+Content-Type: application/json
+Cookie: token={{token}}
+
+{
+  "content": "Corrected note."
+}
+
+### Delete  ->  204
+DELETE {{monolith}}/api/entry/1
+Cookie: token={{token}}
+
+
+### =========================================================================
+### 5. Treatment process calculation
+### =========================================================================
+
+### Stateless calculation from the user's pharmacological parameters  ->  200
+GET {{monolith}}/api/treatment-process
+Cookie: token={{token}}
+
+
+### =========================================================================
+### 6. CORS preflight
+### =========================================================================
+
+### Preflight  ->  204 with Access-Control-Allow-Origin: http://localhost:5173
+OPTIONS {{monolith}}/api/reminder
+Origin: http://localhost:5173
+Access-Control-Request-Method: GET
+
+
+### =========================================================================
+### 7. Authentication edge cases
+### =========================================================================
+
+### Token in the Authorization header instead of the cookie  ->  500
+### JwtBearer falls back to the header and authenticates the request, but the
+### controller then reads the token from the cookie again and passes null to
+### ITokenService. This is why the monolith has to accept the cookie from the
+### frontend, while the Treatment service will read only the header the
+### monolith sets when it forwards the call.
+GET {{monolith}}/api/reminder
+Authorization: Bearer {{token}}
+
+### Malformed token  ->  401
+GET {{monolith}}/api/reminder
+Cookie: token=not.a.jwt
+
+
+### =========================================================================
+### 8. Generating traffic for Jaeger
+###
+### Fire this, then open http://localhost:16686 and pick the "monolith"
+### service. Before the switch the trace is monolith -> one SQL query. After
+### it, the same request should show monolith -> HTTP call -> Treatment
+### service -> SQL, all in ONE trace. Two unlinked traces mean the
+### traceparent header is not propagated by the HttpClient that
+### TreatmentServiceReminderGateway uses.
+### =========================================================================
+
+### Served in-process by the monolith
+GET {{monolith}}/api/reminder
+Cookie: token={{token}}

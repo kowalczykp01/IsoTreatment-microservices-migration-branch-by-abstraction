@@ -361,3 +361,10 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Docker Compose secrets
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store

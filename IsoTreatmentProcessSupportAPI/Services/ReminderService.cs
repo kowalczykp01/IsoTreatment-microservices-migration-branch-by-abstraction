@@ -1,6 +1,6 @@
-﻿using AutoMapper;
 using IsoTreatmentProcessSupportAPI.Entities;
 using IsoTreatmentProcessSupportAPI.Exceptions;
+using IsoTreatmentProcessSupportAPI.Gateways;
 using IsoTreatmentProcessSupportAPI.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,139 +8,75 @@ namespace IsoTreatmentProcessSupportAPI.Services
 {
     public interface IReminderService
     {
-        IEnumerable<ReminderDto> GetAll(string token);
-        ReminderDto GetById(string token, int id);
-        ReminderDto Add(string token, CreateAndUpdateReminderDto dto);
-        void Delete(string token, int id);
-        ReminderDto Update(string token, int id, CreateAndUpdateReminderDto dto);
+        Task<IEnumerable<ReminderDto>> GetAllAsync(string token, CancellationToken cancellationToken = default);
+        Task<ReminderDto> GetByIdAsync(string token, int id, CancellationToken cancellationToken = default);
+        Task<ReminderDto> AddAsync(string token, CreateAndUpdateReminderDto dto, CancellationToken cancellationToken = default);
+        Task DeleteAsync(string token, int id, CancellationToken cancellationToken = default);
+        Task<ReminderDto> UpdateAsync(string token, int id, CreateAndUpdateReminderDto dto, CancellationToken cancellationToken = default);
     }
     public class ReminderService : IReminderService
     {
         private readonly IsoSupportDbContext _dbContext;
-        private readonly IMapper _mapper;
+        private readonly IReminderGateway _reminderGateway;
         private readonly ITokenService _tokenService;
-        public ReminderService(IsoSupportDbContext dbContext, IMapper mapper, ITokenService tokenService)
+        public ReminderService(IsoSupportDbContext dbContext, IReminderGateway reminderGateway, ITokenService tokenService)
         {
             _dbContext = dbContext;
-            _mapper = mapper;
+            _reminderGateway = reminderGateway;
             _tokenService = tokenService;
         }
-        public ReminderDto Add(string token, CreateAndUpdateReminderDto dto)
+        public async Task<ReminderDto> AddAsync(string token, CreateAndUpdateReminderDto dto, CancellationToken cancellationToken = default)
         {
-            int userId = _tokenService.GetUserIdFromToken(token);
+            int userId = await GetExistingUserIdAsync(token, cancellationToken);
 
-            var user = _dbContext.Users.FirstOrDefault(u => u.Id == userId);
-
-            if (user is null)
-            {
-                throw new NotFoundException("User not found");
-            }
-
-            var reminderEntity = _mapper.Map<Reminder>(dto);
-
-            reminderEntity.UserId = userId;
-
-            _dbContext.Reminders.Add(reminderEntity);
-            _dbContext.SaveChanges();
-
-            var addedReminder = _mapper.Map<ReminderDto>(reminderEntity);
-            return addedReminder;
+            return await _reminderGateway.AddAsync(userId, dto.Time, cancellationToken);
         }
 
-        public void Delete(string token, int id)
+        public async Task DeleteAsync(string token, int id, CancellationToken cancellationToken = default)
         {
-            int userId = _tokenService.GetUserIdFromToken(token);
+            int userId = await GetExistingUserIdAsync(token, cancellationToken);
 
-            var user = _dbContext.Users
-                .Include(u => u.Reminders)
-                .FirstOrDefault(u => u.Id == userId);
-
-            if (user is null)
-            {
-                throw new NotFoundException("User not found");
-            }
-
-            var reminder = user.Reminders.FirstOrDefault(r => r.Id == id);
-
-
-            if (reminder is null)
+            if (!await _reminderGateway.DeleteAsync(id, userId, cancellationToken))
             {
                 throw new NotFoundException("Reminder not found");
             }
-
-            _dbContext.Reminders.Remove(reminder);
-            _dbContext.SaveChanges();
         }
 
-        public IEnumerable<ReminderDto> GetAll(string token)
+        public async Task<IEnumerable<ReminderDto>> GetAllAsync(string token, CancellationToken cancellationToken = default)
+        {
+            int userId = await GetExistingUserIdAsync(token, cancellationToken);
+
+            return await _reminderGateway.GetAllForUserAsync(userId, cancellationToken);
+        }
+
+        public async Task<ReminderDto> GetByIdAsync(string token, int id, CancellationToken cancellationToken = default)
+        {
+            int userId = await GetExistingUserIdAsync(token, cancellationToken);
+
+            return await _reminderGateway.GetByIdForUserAsync(id, userId, cancellationToken)
+                ?? throw new NotFoundException("Reminder not found");
+        }
+
+        public async Task<ReminderDto> UpdateAsync(string token, int id, CreateAndUpdateReminderDto dto, CancellationToken cancellationToken = default)
+        {
+            int userId = await GetExistingUserIdAsync(token, cancellationToken);
+
+            return await _reminderGateway.UpdateAsync(id, userId, dto.Time, cancellationToken)
+                ?? throw new NotFoundException("Reminder not found");
+        }
+
+        // The monolith still owns Users, so checking that the user exists stays here.
+        // IReminderGateway covers reminder storage only.
+        private async Task<int> GetExistingUserIdAsync(string token, CancellationToken cancellationToken)
         {
             int userId = _tokenService.GetUserIdFromToken(token);
 
-            var user = _dbContext.Users
-                .Include(u => u.Reminders)
-                .FirstOrDefault(u => u.Id == userId);
-
-            if (user is null)
+            if (!await _dbContext.Users.AnyAsync(u => u.Id == userId, cancellationToken))
             {
                 throw new NotFoundException("User not found");
             }
 
-            var reminderDtos = _mapper.Map<IEnumerable<ReminderDto>>(user.Reminders);
-
-            return reminderDtos;
-        }
-
-        public ReminderDto GetById(string token, int id)
-        {
-            int userId = _tokenService.GetUserIdFromToken(token);
-
-            var user = _dbContext.Users
-                .Include(u => u.Reminders)
-                .FirstOrDefault(u => u.Id == userId);
-
-            if (user is null)
-            {
-                throw new NotFoundException("User not found");
-            }
-
-            var reminder = user.Reminders.FirstOrDefault(r => r.Id == id);
-
-            if (reminder is null)
-            {
-                throw new NotFoundException("Reminder not found");
-            }
-
-            var reminderDto = _mapper.Map<ReminderDto>(reminder);
-
-            return reminderDto;
-        }
-
-        public ReminderDto Update(string token, int id, CreateAndUpdateReminderDto dto)
-        {
-            int userId = _tokenService.GetUserIdFromToken(token);
-
-            var user = _dbContext.Users
-                .Include(u => u.Reminders)
-                .FirstOrDefault(u => u.Id == userId);
-
-            if (user is null)
-            {
-                throw new NotFoundException("User not found");
-            }
-
-            var reminder = user.Reminders.FirstOrDefault(r => r.Id == id);
-
-            if (reminder is null)
-            {
-                throw new NotFoundException("Reminder not found");
-            }
-
-            reminder.Time = dto.Time;
-
-            _dbContext.SaveChanges();
-
-            var updatedReminder = _mapper.Map<ReminderDto>(reminder);
-            return updatedReminder;
+            return userId;
         }
     }
 }
